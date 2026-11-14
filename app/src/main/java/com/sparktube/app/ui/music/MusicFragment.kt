@@ -275,7 +275,7 @@ class MusicFragment : Fragment(), ScrollsToTop {
         // One orchestrated moment: the hero cards rise in on first load only.
         // Everything else appears instantly so the screen never feels slow.
         if (animate) {
-            Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18), limit = 4)
+            Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18).toFloat(), limit = 4)
         }
     }
 
