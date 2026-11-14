@@ -260,9 +260,9 @@ class MusicFragment : Fragment() {
         }
 
         // Staggered entrance (skipped when animations are off in settings)
-        Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18), limit = 4)
-        Motion.enter(b.shelfRow.children.toList(), AppPrefs.animations, dp(14), limit = 6)
-        Motion.enter(b.popularList.children.toList(), AppPrefs.animations, dp(10), limit = 8)
+        Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18).toFloat(), limit = 4)
+        Motion.enter(b.shelfRow.children.toList(), AppPrefs.animations, dp(14).toFloat(), limit = 6)
+        Motion.enter(b.popularList.children.toList(), AppPrefs.animations, dp(10).toFloat(), limit = 8)
     }
 
     /** Builds an authentic Apple Music tall editorial card (240dp x 300dp). */
