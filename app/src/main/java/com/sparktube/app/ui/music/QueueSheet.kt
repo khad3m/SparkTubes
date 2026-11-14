@@ -1,10 +1,13 @@
 package com.sparktube.app.ui.music
 
 import android.content.Context
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import android.widget.Toast
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -27,10 +30,10 @@ data class QueueRow(
 )
 
 /**
- * The music queue ("Up next"): the current song, what already played and what
- * comes next. While a radio is running this is the radio's song list, so the
- * user can jump to whichever track they feel like instead of waiting for the
- * auto-generated order. Updates live while the radio keeps adding songs.
+ * Interactive Up Next Queue Sheet with:
+ * - Drag-to-Reorder (`ItemTouchHelper.UP or ItemTouchHelper.DOWN`)
+ * - Swipe-Left/Right-to-Remove (`ItemTouchHelper.START or ItemTouchHelper.END`)
+ * - Tap any song to jump straight to that queue index
  */
 class QueueSheet(context: Context) : BottomSheetDialog(context) {
 
@@ -58,6 +61,40 @@ class QueueSheet(context: Context) : BottomSheetDialog(context) {
         binding.list.layoutManager = LinearLayoutManager(context)
         binding.list.adapter = adapter
         binding.list.itemAnimator = null
+
+        // Attach Drag-to-Reorder and Swipe-to-Remove
+        val touchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN,
+            ItemTouchHelper.START or ItemTouchHelper.END
+        ) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean {
+                val from = viewHolder.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
+                recyclerView.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                PlaybackCenter.moveQueueItem(from, to)
+                return true
+            }
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val pos = viewHolder.bindingAdapterPosition
+                if (pos == RecyclerView.NO_POSITION) return
+                if (pos == PlaybackCenter.queueIndex) {
+                    // Don't remove the actively playing item; snap it back
+                    adapter.notifyItemChanged(pos)
+                    Toast.makeText(context, "Currently playing track cannot be swiped away", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                PlaybackCenter.removeQueueItem(pos)
+                Toast.makeText(context, "Removed from queue", Toast.LENGTH_SHORT).show()
+            }
+        })
+        touchHelper.attachToRecyclerView(binding.list)
+
         binding.closeButton.setOnClickListener { dismiss() }
         refresh()
     }
@@ -80,7 +117,7 @@ class QueueSheet(context: Context) : BottomSheetDialog(context) {
 
         binding.radioBadge.isVisible = radio
         binding.countLabel.text =
-            binding.root.context.getString(R.string.queue_songs_fmt, queue.size)
+            "${binding.root.context.getString(R.string.queue_songs_fmt, queue.size)} · Drag or swipe"
 
         val rows = queue.mapIndexed { i, entry ->
             QueueRow(
@@ -97,7 +134,6 @@ class QueueSheet(context: Context) : BottomSheetDialog(context) {
                 binding.status.isVisible = true
             }
             rows.size == 1 && radio -> {
-                // Radio just started: its songs are still being fetched.
                 binding.status.setText(R.string.queue_loading)
                 binding.status.isVisible = true
             }
@@ -138,7 +174,6 @@ class QueueSheet(context: Context) : BottomSheetDialog(context) {
             )
             b.playingIcon.isVisible = row.isCurrent
             b.duration.isVisible = !row.isCurrent
-            // Songs that already played fade back so "what's next" stands out.
             b.root.alpha = if (row.isPast) 0.55f else 1f
             b.root.setOnClickListener { onPick(row) }
         }

@@ -31,7 +31,7 @@
             android:id="@+id/profileHeroCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="14dp"
+            android:layout_marginBottom="12dp"
             android:background="@drawable/bg_profile_hero_card"
             android:clickable="true"
             android:focusable="true"
@@ -100,7 +100,80 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
-        <!-- 2x2 Settings Card Grid -->
+        <!-- Full-Width YouTube / Google Account Sign-In Card (Unlocks Age-Restricted & Login-Only Videos) -->
+        <LinearLayout
+            android:id="@+id/rowGoogleAccount"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_card_soft"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="16dp">
+
+            <FrameLayout
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:background="@drawable/bg_glass_circle">
+
+                <ImageView
+                    android:id="@+id/googleAccountIcon"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_lock_open"
+                    app:tint="?attr/accent" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_marginEnd="10dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/googleAccountTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:singleLine="true"
+                    android:text="@string/youtube_account_title"
+                    android:textColor="@color/on_surface"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/googleAccountSubtitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:text="@string/youtube_account_disconnected_sub"
+                    android:textColor="@color/on_surface_variant"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/googleAccountBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:background="@drawable/bg_action_pill_active"
+                android:gravity="center"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="@string/youtube_sign_in_short"
+                android:textColor="@color/white"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 2x2 Settings Card Grid (Ultra-Transparent Glass Cards) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -115,130 +188,110 @@
                 android:orientation="horizontal">
 
                 <!-- Card 1: Country / Region -->
-                <com.google.android.material.card.MaterialCardView
+                <LinearLayout
                     android:id="@+id/rowCountry"
                     android:layout_width="0dp"
                     android:layout_height="128dp"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1"
+                    android:background="@drawable/bg_card_soft"
                     android:clickable="true"
                     android:focusable="true"
-                    app:cardBackgroundColor="?attr/cardBg"
-                    app:cardCornerRadius="20dp"
-                    app:cardElevation="0dp"
-                    app:rippleColor="?attr/accentSoft"
-                    app:strokeColor="@color/glass_stroke"
-                    app:strokeWidth="1dp">
+                    android:orientation="vertical"
+                    android:padding="16dp">
 
-                    <LinearLayout
+                    <FrameLayout
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="@drawable/bg_glass_circle">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_globe"
+                            app:tint="?attr/accent" />
+                    </FrameLayout>
+
+                    <Space
+                        android:layout_width="1dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+
+                    <TextView
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:orientation="vertical"
-                        android:padding="16dp">
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="@string/country_region"
+                        android:textColor="@color/on_surface"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
 
-                        <FrameLayout
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:background="@drawable/bg_glass_circle">
+                    <TextView
+                        android:id="@+id/countryValue"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp" />
+                </LinearLayout>
 
-                            <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:layout_gravity="center"
-                                android:importantForAccessibility="no"
-                                android:src="@drawable/ic_globe"
-                                app:tint="?attr/accent" />
-                        </FrameLayout>
-
-                        <Space
-                            android:layout_width="1dp"
-                            android:layout_height="0dp"
-                            android:layout_weight="1" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="@string/country_region"
-                            android:textColor="@color/on_surface"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/countryValue"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:textColor="@color/on_surface_variant"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
-
-                <!-- Card 2: General Settings -->
-                <com.google.android.material.card.MaterialCardView
+                <!-- Card 2: General Settings (Includes In-App Update Control) -->
+                <LinearLayout
                     android:id="@+id/rowSettings"
                     android:layout_width="0dp"
                     android:layout_height="128dp"
                     android:layout_marginStart="6dp"
                     android:layout_weight="1"
+                    android:background="@drawable/bg_card_soft"
                     android:clickable="true"
                     android:focusable="true"
-                    app:cardBackgroundColor="?attr/cardBg"
-                    app:cardCornerRadius="20dp"
-                    app:cardElevation="0dp"
-                    app:rippleColor="?attr/accentSoft"
-                    app:strokeColor="@color/glass_stroke"
-                    app:strokeWidth="1dp">
+                    android:orientation="vertical"
+                    android:padding="16dp">
 
-                    <LinearLayout
+                    <FrameLayout
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="@drawable/bg_glass_circle">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_settings"
+                            app:tint="?attr/accent" />
+                    </FrameLayout>
+
+                    <Space
+                        android:layout_width="1dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+
+                    <TextView
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:orientation="vertical"
-                        android:padding="16dp">
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="@string/menu_settings"
+                        android:textColor="@color/on_surface"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
 
-                        <FrameLayout
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:background="@drawable/bg_glass_circle">
-
-                            <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:layout_gravity="center"
-                                android:importantForAccessibility="no"
-                                android:src="@drawable/ic_settings"
-                                app:tint="?attr/accent" />
-                        </FrameLayout>
-
-                        <Space
-                            android:layout_width="1dp"
-                            android:layout_height="0dp"
-                            android:layout_weight="1" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="@string/menu_settings"
-                            android:textColor="@color/on_surface"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="Theme · Accent · Data"
-                            android:textColor="@color/on_surface_variant"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="Theme · Updates · Data"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp" />
+                </LinearLayout>
             </LinearLayout>
 
             <!-- Grid Row 2: Video Settings + Music Settings -->
@@ -249,130 +302,110 @@
                 android:orientation="horizontal">
 
                 <!-- Card 3: Video Settings -->
-                <com.google.android.material.card.MaterialCardView
+                <LinearLayout
                     android:id="@+id/rowVideoSettings"
                     android:layout_width="0dp"
                     android:layout_height="128dp"
                     android:layout_marginEnd="6dp"
                     android:layout_weight="1"
+                    android:background="@drawable/bg_card_soft"
                     android:clickable="true"
                     android:focusable="true"
-                    app:cardBackgroundColor="?attr/cardBg"
-                    app:cardCornerRadius="20dp"
-                    app:cardElevation="0dp"
-                    app:rippleColor="?attr/accentSoft"
-                    app:strokeColor="@color/glass_stroke"
-                    app:strokeWidth="1dp">
+                    android:orientation="vertical"
+                    android:padding="16dp">
 
-                    <LinearLayout
+                    <FrameLayout
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="@drawable/bg_glass_circle">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_video_cam"
+                            app:tint="?attr/accent" />
+                    </FrameLayout>
+
+                    <Space
+                        android:layout_width="1dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+
+                    <TextView
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:orientation="vertical"
-                        android:padding="16dp">
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="@string/menu_video_settings"
+                        android:textColor="@color/on_surface"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
 
-                        <FrameLayout
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:background="@drawable/bg_glass_circle">
-
-                            <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:layout_gravity="center"
-                                android:importantForAccessibility="no"
-                                android:src="@drawable/ic_video_cam"
-                                app:tint="?attr/accent" />
-                        </FrameLayout>
-
-                        <Space
-                            android:layout_width="1dp"
-                            android:layout_height="0dp"
-                            android:layout_weight="1" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="@string/menu_video_settings"
-                            android:textColor="@color/on_surface"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="Quality · Smart DASH"
-                            android:textColor="@color/on_surface_variant"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="SponsorBlock · Quality"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp" />
+                </LinearLayout>
 
                 <!-- Card 4: Music Settings -->
-                <com.google.android.material.card.MaterialCardView
+                <LinearLayout
                     android:id="@+id/rowMusicSettings"
                     android:layout_width="0dp"
                     android:layout_height="128dp"
                     android:layout_marginStart="6dp"
                     android:layout_weight="1"
+                    android:background="@drawable/bg_card_soft"
                     android:clickable="true"
                     android:focusable="true"
-                    app:cardBackgroundColor="?attr/cardBg"
-                    app:cardCornerRadius="20dp"
-                    app:cardElevation="0dp"
-                    app:rippleColor="?attr/accentSoft"
-                    app:strokeColor="@color/glass_stroke"
-                    app:strokeWidth="1dp">
+                    android:orientation="vertical"
+                    android:padding="16dp">
 
-                    <LinearLayout
+                    <FrameLayout
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="@drawable/bg_glass_circle">
+
+                        <ImageView
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_headset"
+                            app:tint="@color/music_green" />
+                    </FrameLayout>
+
+                    <Space
+                        android:layout_width="1dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+
+                    <TextView
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:orientation="vertical"
-                        android:padding="16dp">
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="@string/menu_music_settings"
+                        android:textColor="@color/on_surface"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
 
-                        <FrameLayout
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:background="@drawable/bg_glass_circle">
-
-                            <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:layout_gravity="center"
-                                android:importantForAccessibility="no"
-                                android:src="@drawable/ic_headset"
-                                app:tint="@color/music_green" />
-                        </FrameLayout>
-
-                        <Space
-                            android:layout_width="1dp"
-                            android:layout_height="0dp"
-                            android:layout_weight="1" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="@string/menu_music_settings"
-                            android:textColor="@color/on_surface"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:ellipsize="end"
-                            android:singleLine="true"
-                            android:text="High Bitrate · Autoplay"
-                            android:textColor="@color/on_surface_variant"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:text="Synced Lyrics · EQ"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp" />
+                </LinearLayout>
             </LinearLayout>
         </LinearLayout>
 

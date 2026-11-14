@@ -1,5 +1,7 @@
 package com.sparktube.app.data
 
+import com.sparktube.app.net.OkHttpDownloader
+import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.util.AppPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -7,6 +9,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 import org.schabi.newpipe.extractor.InfoItem
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.Page
@@ -18,15 +24,17 @@ import org.schabi.newpipe.extractor.channel.tabs.ChannelTabInfo
 import org.schabi.newpipe.extractor.channel.tabs.ChannelTabs
 import org.schabi.newpipe.extractor.comments.CommentsInfo
 import org.schabi.newpipe.extractor.comments.CommentsInfoItem
-import org.schabi.newpipe.extractor.kiosk.KioskInfo
-import org.schabi.newpipe.extractor.linkhandler.ListLinkHandler
 import org.schabi.newpipe.extractor.localization.ContentCountry
 import org.schabi.newpipe.extractor.search.SearchInfo
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
 import org.schabi.newpipe.extractor.stream.Description
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import org.schabi.newpipe.extractor.stream.SubtitlesStream
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 data class PageResult(
     val items: List<StreamInfoItem>,
@@ -46,7 +54,6 @@ data class ChannelUi(
     val description: String
 )
 
-/** One YouTube comment, already flattened for the comments sheet. */
 data class CommentUi(
     val id: String,
     val author: String,
@@ -58,13 +65,10 @@ data class CommentUi(
     val pinned: Boolean,
     val hearted: Boolean,
     val replyCount: Int,
-    /** Cursor for this comment's replies (null when it has none / cannot be fetched). */
     val repliesPage: Page? = null,
-    /** True for an entry that is itself a reply to another comment. */
     val isReply: Boolean = false
 )
 
-/** One page of comments plus the cursor for the next one. */
 data class CommentsPage(
     val items: List<CommentUi>,
     val nextPage: Page?,
@@ -72,24 +76,41 @@ data class CommentsPage(
     val disabled: Boolean
 )
 
+/** One timestamped lyric line parsed from LRCLIB `[mm:ss.xx] text`. */
+data class LyricLine(
+    val timeMs: Long,
+    val text: String
+)
+
+data class LyricsResult(
+    val syncedLines: List<LyricLine>,
+    val plainLyrics: String
+)
+
+/** SponsorBlock segment for automatic skipping on the video watch page. */
+data class SponsorSegment(
+    val startMs: Long,
+    val endMs: Long,
+    val category: String
+)
+
+/** Timestamped subtitle cue for live video captions (supports Bangla Auto-Translate & Original CC). */
+data class SubtitleCue(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
+
 /**
  * All YouTube access goes through this repository.
- * Every list returned here is already filtered: live streams never make it out.
+ * Every list returned here is already filtered: live streams never make it out,
+ * and Music endpoints strictly return songs only (via YoutubeSearchQueryHandlerFactory.MUSIC_SONGS
+ * + LiveFilter.sanitizeMusic).
  */
 object YtRepository {
 
     private val service: StreamingService get() = ServiceList.YouTube
 
-    /**
-     * Short-lived cache for [streamInfo]: the watch page, related-fetch and
-     * playback resolve paths can all ask for the same URL within seconds of
-     * each other (e.g. opening a video re-resolves it right after the home
-     * feed's related fetch already did). A 3-minute TTL cuts that duplicate
-     * extraction work while staying well clear of googlevideo's signed
-     * playback URLs going stale (they're valid for hours, not minutes), so
-     * cached entries are never served after their underlying stream links
-     * could plausibly have expired.
-     */
     private const val STREAM_INFO_CACHE_TTL_MS = 3 * 60 * 1000L
     private const val STREAM_INFO_CACHE_MAX = 30
     private data class CachedStreamInfo(val info: StreamInfo, val atMs: Long)
@@ -99,24 +120,16 @@ object YtRepository {
                 size > STREAM_INFO_CACHE_MAX
         }
 
-    /**
-     * YouTube removed the classic global trending feed in 2025, but the
-     * region-aware trending surfaces still exist. The home feed blends the
-     * country-based trending kiosks (trailers, popular episodes, gaming) into
-     * one region-aware suggestion list.
-     */
     private val HOME_KIOSKS = listOf(
         "trending_movies_and_shows",
         "trending_podcasts_episodes",
         "trending_gaming"
     )
 
-    /** Applies the country selection globally so feeds/search follow it. */
     suspend fun applyCountry(countryCode: String) = withContext(Dispatchers.IO) {
         NewPipe.setPreferredContentCountry(ContentCountry(countryCode))
     }
 
-    /** Country based suggestion feed used on the Home tab. */
     suspend fun trending(countryCode: String): List<StreamInfoItem> =
         withContext(Dispatchers.IO) {
             NewPipe.setPreferredContentCountry(ContentCountry(countryCode))
@@ -135,7 +148,6 @@ object YtRepository {
                 throw lastError ?: IOException("No content available for this region")
             }
 
-            // Round-robin blend so the feed feels varied and general.
             val blended = mutableListOf<StreamInfoItem>()
             val seen = mutableSetOf<String>()
             val maxSize = lists.maxOf { it.size }
@@ -150,27 +162,9 @@ object YtRepository {
             blended
         }
 
-    /** Max items per channel at the head of the feed (variety guard). */
     private const val MAX_PER_CHANNEL = 3
-
-    /** Budget for the parallel related-list fetches, so the feed stays snappy. */
     private const val RELATED_FETCH_TIMEOUT_MS = 10_000L
 
-    /**
-     * Fully personalized home feed: EVERY row is ranked by the user's own
-     * usage profile (plays, searches, favorites, subscriptions, downloads).
-     *
-     *  1. the pool is the region's trending blend plus "because you watched"
-     *     related candidates pulled from the recently watched videos;
-     *  2. recently watched videos themselves are excluded (already seen);
-     *  3. the whole pool is scored with [RecommendEngine.score] and sorted
-     *     best-match first — there is no random zone any more;
-     *  4. a soft per-channel cap keeps one channel from flooding the top:
-     *     overflow items spill to the tail in score order instead of being
-     *     dropped, so no video is lost.
-     *
-     * Fresh installs (no signals) fall back to the plain trending blend.
-     */
     suspend fun personalizedFeed(
         countryCode: String,
         snap: RecommendEngine.Snapshot
@@ -180,7 +174,6 @@ object YtRepository {
             return@withContext trending
         }
 
-        // 1. Related-of-recent candidates, deduped against trending + watched.
         val seen = trending.map { it.url }.toHashSet()
         val watched = snap.recentWatchedUrls.toHashSet()
         val candidates = mutableListOf<StreamInfoItem>()
@@ -201,21 +194,14 @@ object YtRepository {
             }
         }
 
-        // 2. One ranked pool: related candidates + trending, minus anything
-        //    the user just watched, all scored by the usage profile.
         val pool = (candidates + trending).filter { it.url !in watched }
         if (pool.isEmpty()) {
-            // Extremely heavy viewer: everything is excluded. Show the plain
-            // blend rather than an empty feed.
             return@withContext trending
         }
         val ranked = pool
             .map { it to RecommendEngine.score(it, snap) }
             .sortedByDescending { (_, score) -> score }
 
-        // 3. Soft per-channel cap: the first MAX_PER_CHANNEL items of any
-        //    channel stay in score order at the head; the rest keep their
-        //    score order but spill to the tail.
         val perChannel = HashMap<String, Int>()
         val head = mutableListOf<StreamInfoItem>()
         val tail = mutableListOf<StreamInfoItem>()
@@ -235,25 +221,37 @@ object YtRepository {
     }
 
     /**
-     * Trending music: uses YouTube Charts when the selected country supports
-     * it, otherwise falls back to a music search for that region.
+     * Strict Music-Only Trending feed:
+     * Never uses YouTube's general TrendingVideos kiosk (which mixes vlogs, gaming, and movie trailers).
+     * Always queries YouTube Music's `MUSIC_SONGS` catalog and filters via `LiveFilter.sanitizeMusic`.
      */
     suspend fun musicTrending(countryCode: String): PageResult =
         withContext(Dispatchers.IO) {
             NewPipe.setPreferredContentCountry(ContentCountry(countryCode))
-            try {
-                val info = KioskInfo.getInfo(
-                    service, "https://charts.youtube.com/charts/TrendingVideos"
-                )
-                PageResult(LiveFilter.sanitize(info.relatedItems), null)
-            } catch (e: Exception) {
-                val handler = service.searchQHFactory.fromQuery(
-                    "top songs",
-                    listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS),
-                    ""
-                )
-                executeSearch(handler, null)
+            val countryName = Countries.nameOf(countryCode)
+            val queries = listOf(
+                "$countryName top songs hits",
+                "top hits songs official audio"
+            )
+            val combined = mutableListOf<StreamInfoItem>()
+            val seen = HashSet<String>()
+            for (q in queries) {
+                runCatching {
+                    val handler = service.searchQHFactory.fromQuery(
+                        q,
+                        listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS),
+                        ""
+                    )
+                    val res = executeMusicSearch(handler, null)
+                    res.items.forEach { item ->
+                        if (!item.url.isNullOrBlank() && seen.add(item.url!!)) {
+                            combined.add(item)
+                        }
+                    }
+                }
+                if (combined.size >= 24) break
             }
+            PageResult(combined, null)
         }
 
     /** Video search. Live results are stripped before they reach the UI. */
@@ -268,7 +266,10 @@ object YtRepository {
             executeSearch(handler, page)
         }
 
-    /** YouTube Music songs search used by genre chips on the Music tab. */
+    /**
+     * Strict YouTube Music songs search:
+     * Uses `MUSIC_SONGS` handler + `LiveFilter.sanitizeMusic` so no non-music videos appear.
+     */
     suspend fun searchMusic(query: String, page: Page? = null): PageResult =
         withContext(Dispatchers.IO) {
             NewPipe.setPreferredContentCountry(ContentCountry(AppPrefs.countryOrDefault))
@@ -277,7 +278,7 @@ object YtRepository {
                 listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS),
                 ""
             )
-            executeSearch(handler, page)
+            executeMusicSearch(handler, page)
         }
 
     /** Channel-only search for the Channels tab of the search screen. */
@@ -292,7 +293,19 @@ object YtRepository {
             executeChannelSearch(handler, page)
         }
 
-    /** Full stream details for playback. */
+    fun clearCache() {
+        synchronized(streamInfoCache) {
+            streamInfoCache.clear()
+        }
+    }
+
+    fun invalidateStreamCache(url: String) {
+        synchronized(streamInfoCache) {
+            streamInfoCache.remove(url)
+        }
+    }
+
+    /** Full stream details for playback (with automatic Multi-Client InnerTube & Google Auth fallback). */
     suspend fun streamInfo(url: String): StreamInfo =
         withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
@@ -301,14 +314,24 @@ object YtRepository {
             }?.let { cached ->
                 if (now - cached.atMs < STREAM_INFO_CACHE_TTL_MS) return@withContext cached.info
             }
-            val info = StreamInfo.getInfo(service, url)
+            val info = try {
+                val first = StreamInfo.getInfo(service, url)
+                if (first.videoStreams.isEmpty() && first.videoOnlyStreams.isEmpty() && first.audioStreams.isEmpty()) {
+                    YouTubePlayerUnlock.forceUnlockForUrl(url)
+                    StreamInfo.getInfo(service, url)
+                } else {
+                    first
+                }
+            } catch (firstErr: Exception) {
+                YouTubePlayerUnlock.forceUnlockForUrl(url)
+                StreamInfo.getInfo(service, url)
+            }
             synchronized(streamInfoCache) {
                 streamInfoCache[url] = CachedStreamInfo(info, now)
             }
             info
         }
 
-    /** Search keyword suggestions shown while the user types. */
     suspend fun suggestions(query: String): List<String> =
         withContext(Dispatchers.IO) {
             if (query.isBlank()) {
@@ -320,7 +343,6 @@ object YtRepository {
             }
         }
 
-    /** Channel header: name, avatar, subscriber count. */
     suspend fun channelInfo(url: String): ChannelUi =
         withContext(Dispatchers.IO) {
             val info = ChannelInfo.getInfo(service, url)
@@ -333,7 +355,6 @@ object YtRepository {
             )
         }
 
-    /** First page of a channel's videos tab (live filtered out). */
     suspend fun channelVideos(channelUrl: String): Pair<List<StreamInfoItem>, Page?> =
         withContext(Dispatchers.IO) {
             val info = ChannelInfo.getInfo(service, channelUrl)
@@ -344,7 +365,6 @@ object YtRepository {
             LiveFilter.sanitize(page.relatedItems) to page.nextPage
         }
 
-    /** Next page of a channel's videos tab. */
     suspend fun channelVideosMore(
         channelUrl: String,
         page: Page
@@ -358,7 +378,6 @@ object YtRepository {
             LiveFilter.sanitize(result.items) to result.nextPage
         }
 
-    /** First page of top comments for a video. */
     suspend fun comments(url: String): CommentsPage =
         withContext(Dispatchers.IO) {
             val info = CommentsInfo.getInfo(service, url)
@@ -370,7 +389,6 @@ object YtRepository {
             )
         }
 
-    /** Next page of comments (the cursor comes from the previous page). */
     suspend fun commentsMore(url: String, page: Page): CommentsPage =
         withContext(Dispatchers.IO) {
             val result = CommentsInfo.getMoreItems(service, url, page)
@@ -382,10 +400,6 @@ object YtRepository {
             )
         }
 
-    /**
-     * Replies of one comment (first page or a follow-up page — the cursor is
-     * the comment's own replies [Page] / the page returned before).
-     */
     suspend fun commentReplies(videoUrl: String, page: Page): CommentsPage =
         withContext(Dispatchers.IO) {
             val result = CommentsInfo.getMoreItems(service, videoUrl, page)
@@ -399,8 +413,6 @@ object YtRepository {
 
     private fun CommentsInfoItem.toCommentUi(isReply: Boolean = false): CommentUi {
         val body = commentText
-        // Some items report the avatar under several sizes (or with an unknown
-        // height): take the largest one that actually has a URL.
         val avatar = uploaderAvatars
             .filter { !it.url.isNullOrBlank() }
             .maxByOrNull { it.height }
@@ -422,12 +434,402 @@ object YtRepository {
         )
     }
 
-    /** Related videos for a stream (used for the watch page + radio autoplay). */
     suspend fun related(url: String): List<StreamInfoItem> =
         withContext(Dispatchers.IO) {
             runCatching { streamInfo(url).relatedItems }
                 .getOrDefault(emptyList())
                 .let { LiveFilter.sanitize(it) }
+        }
+
+    // ----- Feature: Subtitles with Auto-Translate to Bangla (বাংলা) -----
+
+    private val vttCueHeaderRegex = Regex(
+        "(?:(\\d{1,2}):)?(\\d{2}):(\\d{2})[.,](\\d{3})\\s*-->\\s*(?:(\\d{1,2}):)?(\\d{2}):(\\d{2})[.,](\\d{3})"
+    )
+
+    /**
+     * Fetches and parses video subtitles from NewPipeExtractor's `SubtitlesStream` list.
+     * When `mode == AppPrefs.SUBTITLE_MODE_BANGLA`, prefers native Bengali captions if present,
+     * otherwise appends YouTube's `&tlang=bn` server-side auto-translate parameter, and falls back
+     * to client-side GTX translation into Bengali (`bn`) if needed.
+     */
+    suspend fun fetchSubtitles(
+        subtitles: List<SubtitlesStream>,
+        mode: String
+    ): List<SubtitleCue> = withContext(Dispatchers.IO) {
+        if (mode == AppPrefs.SUBTITLE_MODE_OFF || subtitles.isEmpty()) return@withContext emptyList()
+        try {
+            val valid = subtitles.filter { it.isUrl && !it.content.isNullOrBlank() }
+            if (valid.isEmpty()) return@withContext emptyList()
+
+            val chosen = if (mode == AppPrefs.SUBTITLE_MODE_BANGLA) {
+                valid.firstOrNull { it.languageTag.startsWith("bn", ignoreCase = true) }
+                    ?: valid.firstOrNull { !it.isAutoGenerated && it.languageTag.startsWith("en", ignoreCase = true) }
+                    ?: valid.firstOrNull { !it.isAutoGenerated }
+                    ?: valid.first()
+            } else {
+                valid.firstOrNull { !it.isAutoGenerated } ?: valid.first()
+            }
+
+            val isAlreadyBangla = chosen.languageTag.startsWith("bn", ignoreCase = true)
+            val baseUrl = chosen.content
+            val targetUrl = if (mode == AppPrefs.SUBTITLE_MODE_BANGLA && !isAlreadyBangla) {
+                if (baseUrl.contains("tlang=")) {
+                    baseUrl.replace(Regex("tlang=[^&]+"), "tlang=bn")
+                } else if (baseUrl.contains("?")) {
+                    "$baseUrl&tlang=bn"
+                } else {
+                    "$baseUrl?tlang=bn"
+                }
+            } else {
+                baseUrl
+            }
+
+            val rawTranslated = downloadSubtitleText(targetUrl)
+            var cues = parseSubtitlePayload(rawTranslated)
+
+            // Fallback: if &tlang=bn returned empty on a specific format, fetch original and auto-translate to Bangla
+            if (cues.isEmpty() && mode == AppPrefs.SUBTITLE_MODE_BANGLA && targetUrl != baseUrl) {
+                val rawOrig = downloadSubtitleText(baseUrl)
+                val origCues = parseSubtitlePayload(rawOrig)
+                if (origCues.isNotEmpty()) {
+                    cues = translateCuesToBangla(origCues)
+                }
+            } else if (cues.isNotEmpty() && mode == AppPrefs.SUBTITLE_MODE_BANGLA && !isAlreadyBangla && !containsBengaliScript(cues)) {
+                cues = translateCuesToBangla(cues)
+            }
+
+            cues
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun containsBengaliScript(cues: List<SubtitleCue>): Boolean =
+        cues.take(15).any { cue -> cue.text.any { ch -> ch in '\u0980'..'\u09FF' } }
+
+    private fun downloadSubtitleText(url: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 8_000
+        conn.readTimeout = 8_000
+        conn.setRequestProperty("User-Agent", OkHttpDownloader.USER_AGENT)
+        return try {
+            if (conn.responseCode in 200..299) {
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                ""
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun parseSubtitlePayload(raw: String): List<SubtitleCue> {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return emptyList()
+        if (trimmed.startsWith("WEBVTT", ignoreCase = true) || vttCueHeaderRegex.containsMatchIn(trimmed)) {
+            val vtt = parseWebVtt(trimmed)
+            if (vtt.isNotEmpty()) return vtt
+        }
+        return parseXmlTimedText(trimmed)
+    }
+
+    private fun parseWebVtt(vtt: String): List<SubtitleCue> {
+        val out = mutableListOf<SubtitleCue>()
+        val lines = vtt.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            val m = vttCueHeaderRegex.find(line)
+            if (m != null) {
+                val h1 = m.groupValues[1].toLongOrNull() ?: 0L
+                val m1 = m.groupValues[2].toLongOrNull() ?: 0L
+                val s1 = m.groupValues[3].toLongOrNull() ?: 0L
+                val ms1 = m.groupValues[4].toLongOrNull() ?: 0L
+                val startMs = ((h1 * 3600L + m1 * 60L + s1) * 1000L) + ms1
+
+                val h2 = m.groupValues[5].toLongOrNull() ?: 0L
+                val m2 = m.groupValues[6].toLongOrNull() ?: 0L
+                val s2 = m.groupValues[7].toLongOrNull() ?: 0L
+                val ms2 = m.groupValues[8].toLongOrNull() ?: 0L
+                val endMs = ((h2 * 3600L + m2 * 60L + s2) * 1000L) + ms2
+
+                i++
+                val textBuilder = StringBuilder()
+                while (i < lines.size && lines[i].isNotBlank()) {
+                    val clean = Jsoup.parse(lines[i]).text().trim()
+                    if (clean.isNotBlank()) {
+                        if (textBuilder.isNotEmpty()) textBuilder.append(" ")
+                        textBuilder.append(clean)
+                    }
+                    i++
+                }
+                val finalTxt = textBuilder.toString().trim()
+                if (finalTxt.isNotBlank() && endMs > startMs) {
+                    out.add(SubtitleCue(startMs, endMs, finalTxt))
+                }
+            } else {
+                i++
+            }
+        }
+        return mergeOverlappingCues(out)
+    }
+
+    private fun parseXmlTimedText(xml: String): List<SubtitleCue> {
+        val out = mutableListOf<SubtitleCue>()
+        val doc = Jsoup.parse(xml, "", Parser.xmlParser())
+        val elements = doc.select("p, text")
+        for (el in elements) {
+            val rawText = Parser.unescapeEntities(el.text(), false).trim()
+            if (rawText.isBlank()) continue
+
+            val startMs: Long
+            val endMs: Long
+            when {
+                el.hasAttr("t") -> {
+                    startMs = el.attr("t").toLongOrNull() ?: continue
+                    val dur = el.attr("d").toLongOrNull() ?: 3000L
+                    endMs = startMs + dur
+                }
+                el.hasAttr("start") -> {
+                    val startSec = el.attr("start").toDoubleOrNull() ?: continue
+                    val durSec = el.attr("dur").toDoubleOrNull() ?: 3.0
+                    startMs = (startSec * 1000.0).toLong()
+                    endMs = startMs + (durSec * 1000.0).toLong()
+                }
+                el.hasAttr("begin") -> {
+                    startMs = parseTimeCodeToMs(el.attr("begin")) ?: continue
+                    endMs = parseTimeCodeToMs(el.attr("end"))
+                        ?: (el.attr("dur").let { parseTimeCodeToMs(it) }?.let { startMs + it } ?: (startMs + 3000L))
+                }
+                else -> continue
+            }
+            if (endMs > startMs) {
+                out.add(SubtitleCue(startMs, endMs, rawText))
+            }
+        }
+        return mergeOverlappingCues(out)
+    }
+
+    private fun parseTimeCodeToMs(code: String): Long? {
+        val c = code.trim()
+        if (c.isEmpty()) return null
+        if (c.endsWith("s") && !c.contains(":")) {
+            return c.removeSuffix("s").toDoubleOrNull()?.let { (it * 1000.0).toLong() }
+        }
+        val parts = c.replace(',', '.').split(":")
+        return try {
+            when (parts.size) {
+                3 -> {
+                    val h = parts[0].toLong()
+                    val m = parts[1].toLong()
+                    val s = parts[2].toDouble()
+                    ((h * 3600L + m * 60L) * 1000L) + (s * 1000.0).toLong()
+                }
+                2 -> {
+                    val m = parts[0].toLong()
+                    val s = parts[1].toDouble()
+                    (m * 60L * 1000L) + (s * 1000.0).toLong()
+                }
+                else -> c.toDoubleOrNull()?.let { (it * 1000.0).toLong() }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun mergeOverlappingCues(cues: List<SubtitleCue>): List<SubtitleCue> {
+        if (cues.isEmpty()) return emptyList()
+        val sorted = cues.sortedBy { it.startMs }
+        val result = ArrayList<SubtitleCue>(sorted.size)
+        for (cue in sorted) {
+            val prev = result.lastOrNull()
+            if (prev != null && prev.text == cue.text && cue.startMs <= prev.endMs + 200L) {
+                result[result.lastIndex] = prev.copy(endMs = maxOf(prev.endMs, cue.endMs))
+            } else {
+                result.add(cue)
+            }
+        }
+        return result
+    }
+
+    /** Client-side fallback auto-translator into Bengali (`bn`) in compact batches. */
+    private fun translateCuesToBangla(cues: List<SubtitleCue>): List<SubtitleCue> {
+        val out = ArrayList<SubtitleCue>(cues.size)
+        val batchSize = 20
+        var idx = 0
+        while (idx < cues.size && idx < 240) {
+            val slice = cues.subList(idx, minOf(idx + batchSize, cues.size))
+            val joined = slice.joinToString("\n") { it.text.replace('\n', ' ') }
+            val translatedLines = runCatching {
+                val q = URLEncoder.encode(joined, "UTF-8")
+                val u = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=bn&dt=t&q=$q"
+                val conn = URL(u).openConnection() as HttpURLConnection
+                conn.connectTimeout = 6_000
+                conn.readTimeout = 6_000
+                conn.setRequestProperty("User-Agent", OkHttpDownloader.USER_AGENT)
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val outer = JSONArray(body).optJSONArray(0)
+                val sb = StringBuilder()
+                if (outer != null) {
+                    for (j in 0 until outer.length()) {
+                        val seg = outer.optJSONArray(j)?.optString(0, "").orEmpty()
+                        sb.append(seg)
+                    }
+                }
+                sb.toString().lines()
+            }.getOrNull()
+
+            slice.forEachIndexed { i, cue ->
+                val bn = translatedLines?.getOrNull(i)?.trim()?.takeIf { it.isNotBlank() } ?: cue.text
+                out.add(cue.copy(text = bn))
+            }
+            idx += batchSize
+        }
+        if (idx < cues.size) {
+            out.addAll(cues.subList(idx, cues.size))
+        }
+        return out
+    }
+
+    // ----- Feature 1: Real-Time Synced Lyrics (LRCLIB API) -----
+
+    private val lrcRegex = Regex("\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,3}))?](.*)")
+
+    /**
+     * Queries LRCLIB (`https://lrclib.net/api/search`) for time-synced `.lrc` lyrics
+     * matching the track title and artist. Cleans YouTube noise ("Official Video", "Lyrics", etc.).
+     */
+    suspend fun fetchSyncedLyrics(rawTitle: String, rawArtist: String): LyricsResult? =
+        withContext(Dispatchers.IO) {
+            try {
+                val cleanTitle = rawTitle
+                    .replace(Regex("\\(.*?\\)|\\[.*?]"), " ")
+                    .replace(Regex("(?i)official\\s*(music\\s*)?(video|audio|lyric\\s*video)|lyrics?|4k|hd|full\\s*song"), " ")
+                    .trim()
+                    .ifBlank { rawTitle }
+                val cleanArtist = rawArtist
+                    .removeSuffix(" - Topic")
+                    .replace(Regex("(?i)official|vevo"), "")
+                    .trim()
+
+                val q = URLEncoder.encode("$cleanTitle $cleanArtist".trim(), "UTF-8")
+                val conn = URL("https://lrclib.net/api/search?q=$q").openConnection() as HttpURLConnection
+                conn.connectTimeout = 8_000
+                conn.readTimeout = 8_000
+                conn.setRequestProperty("User-Agent", "SparkTube/1.6.0 (https://github.com/khad3m/SparkTubes)")
+                if (conn.responseCode != 200) {
+                    conn.disconnect()
+                    return@withContext null
+                }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val arr = JSONArray(body)
+                if (arr.length() == 0) return@withContext null
+
+                var bestSynced = ""
+                var bestPlain = ""
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val s = obj.optString("syncedLyrics", "")
+                    val p = obj.optString("plainLyrics", "")
+                    if (s.isNotBlank() && bestSynced.isBlank()) bestSynced = s
+                    if (p.isNotBlank() && bestPlain.isBlank()) bestPlain = p
+                    if (bestSynced.isNotBlank()) break
+                }
+                val parsed = parseLrc(bestSynced)
+                if (parsed.isEmpty() && bestPlain.isBlank()) return@withContext null
+                LyricsResult(parsed, bestPlain)
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+    private fun parseLrc(lrc: String): List<LyricLine> {
+        if (lrc.isBlank()) return emptyList()
+        val out = mutableListOf<LyricLine>()
+        lrc.lineSequence().forEach { line ->
+            val m = lrcRegex.find(line.trim()) ?: return@forEach
+            val min = m.groupValues[1].toLongOrNull() ?: 0L
+            val sec = m.groupValues[2].toLongOrNull() ?: 0L
+            val fracRaw = m.groupValues[3]
+            val ms = when (fracRaw.length) {
+                1 -> (fracRaw.toLongOrNull() ?: 0L) * 100L
+                2 -> (fracRaw.toLongOrNull() ?: 0L) * 10L
+                3 -> fracRaw.toLongOrNull() ?: 0L
+                else -> 0L
+            }
+            val text = m.groupValues[4].trim()
+            if (text.isNotBlank()) {
+                out.add(LyricLine(min * 60_000L + sec * 1_000L + ms, text))
+            }
+        }
+        return out.sortedBy { it.timeMs }
+    }
+
+    // ----- Feature 5: SponsorBlock & ReturnYouTubeDislike -----
+
+    fun extractVideoId(url: String): String? {
+        val m = Regex("(?:v=|youtu\\.be/|shorts/)([A-Za-z0-9_-]{11})").find(url)
+        return m?.groupValues?.getOrNull(1)
+    }
+
+    /** Fetches SponsorBlock skip segments (`sponsor`, `selfpromo`, `intro`, `outro`, `interaction`). */
+    suspend fun fetchSponsorSegments(videoUrl: String): List<SponsorSegment> =
+        withContext(Dispatchers.IO) {
+            val videoId = extractVideoId(videoUrl) ?: return@withContext emptyList()
+            try {
+                val cats = URLEncoder.encode("[\"sponsor\",\"selfpromo\",\"intro\",\"outro\",\"interaction\"]", "UTF-8")
+                val api = "https://sponsor.ajay.app/api/skipSegments?videoID=$videoId&categories=$cats"
+                val conn = URL(api).openConnection() as HttpURLConnection
+                conn.connectTimeout = 6_000
+                conn.readTimeout = 6_000
+                if (conn.responseCode != 200) {
+                    conn.disconnect()
+                    return@withContext emptyList()
+                }
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val arr = JSONArray(text)
+                val list = mutableListOf<SponsorSegment>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val seg = obj.optJSONArray("segment") ?: continue
+                    if (seg.length() >= 2) {
+                        val startMs = (seg.optDouble(0, 0.0) * 1000.0).toLong()
+                        val endMs = (seg.optDouble(1, 0.0) * 1000.0).toLong()
+                        val cat = obj.optString("category", "sponsor")
+                        if (endMs > startMs) {
+                            list.add(SponsorSegment(startMs, endMs, cat))
+                        }
+                    }
+                }
+                list
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+    /** Fetches community dislike count via ReturnYouTubeDislike API. */
+    suspend fun fetchDislikeCount(videoUrl: String): Long =
+        withContext(Dispatchers.IO) {
+            val videoId = extractVideoId(videoUrl) ?: return@withContext -1L
+            try {
+                val conn = URL("https://returnyoutubedislikeapi.com/votes?videoId=$videoId")
+                    .openConnection() as HttpURLConnection
+                conn.connectTimeout = 6_000
+                conn.readTimeout = 6_000
+                if (conn.responseCode != 200) {
+                    conn.disconnect()
+                    return@withContext -1L
+                }
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                JSONObject(text).optLong("dislikes", -1L)
+            } catch (e: Exception) {
+                -1L
+            }
         }
 
     private fun fetchKiosk(kioskId: String): List<StreamInfoItem> {
@@ -447,6 +849,19 @@ object YtRepository {
         } else {
             val result = SearchInfo.getMoreItems(service, handler, page)
             PageResult(LiveFilter.sanitize(result.items), result.nextPage)
+        }
+    }
+
+    private fun executeMusicSearch(
+        handler: org.schabi.newpipe.extractor.linkhandler.SearchQueryHandler,
+        page: Page?
+    ): PageResult {
+        return if (page == null) {
+            val info = SearchInfo.getInfo(service, handler)
+            PageResult(LiveFilter.sanitizeMusic(info.relatedItems), info.nextPage)
+        } else {
+            val result = SearchInfo.getMoreItems(service, handler, page)
+            PageResult(LiveFilter.sanitizeMusic(result.items), result.nextPage)
         }
     }
 

@@ -12,7 +12,12 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * OkHttp based [Downloader] implementation used by NewPipeExtractor.
+ * OkHttp based [Downloader] implementation used by NewPipeExtractor,
+ * upgraded with:
+ * - Automatic Google / YouTube session cookie + `SAPISIDHASH` header injection ([YouTubeAuth])
+ * - Outgoing `/youtubei/v1/player` `contentCheckOk` & `racyCheckOk` injection ([YouTubePlayerUnlock])
+ * - Automatic Multi-Client InnerTube Fallback (`ANDROID_VR`, `TVHTML5_SIMPLY_EMBEDDED_PLAYER`, `IOS`)
+ *   whenever a video returns `LOGIN_REQUIRED`, `AGE_VERIFICATION_REQUIRED`, or lacks direct stream URLs.
  */
 object OkHttpDownloader : Downloader() {
 
@@ -27,15 +32,26 @@ object OkHttpDownloader : Downloader() {
 
     @Throws(IOException::class, ReCaptchaException::class)
     override fun execute(request: Request): Response {
+        val url = request.url()
         val builder = okhttp3.Request.Builder()
-            .url(request.url())
+            .url(url)
             .addHeader("User-Agent", USER_AGENT)
 
+        val existingCookies = mutableListOf<String>()
         request.headers().forEach { (name, values) ->
-            values.forEach { value -> builder.addHeader(name, value) }
+            if (name.equals("Cookie", ignoreCase = true)) {
+                existingCookies.addAll(values)
+            } else {
+                values.forEach { value -> builder.addHeader(name, value) }
+            }
         }
 
-        val body = request.dataToSend()
+        // Inject YouTube session cookies & SAPISIDHASH authorization if signed in
+        YouTubeAuth.applyYouTubeAuthToRequest(url, builder, existingCookies)
+
+        val rawBody = request.dataToSend()
+        val body = YouTubePlayerUnlock.patchOutgoingRequestBody(url, rawBody)
+
         when (request.httpMethod().uppercase(Locale.ROOT)) {
             "GET" -> builder.get()
             "HEAD" -> builder.head()
@@ -44,23 +60,25 @@ object OkHttpDownloader : Downloader() {
                 (body ?: ByteArray(0)).toRequestBody("application/json".toMediaTypeOrNull())
             )
             "PUT" -> builder.put(
-                (body ?: ByteArray(0)).toRequestBody("application/json".toMediaTypeOrNull()
-            ))
+                (body ?: ByteArray(0)).toRequestBody("application/json".toMediaTypeOrNull())
+            )
             else -> throw IOException("Unsupported HTTP method: ${request.httpMethod()}")
         }
 
         client.newCall(builder.build()).execute().use { response ->
             if (response.code == 429) {
-                throw ReCaptchaException("reCaptcha Challenge requested", request.url())
+                throw ReCaptchaException("reCaptcha Challenge requested", url)
             }
             val finalUrl = response.request.url.toString()
-            val text = response.body?.string() ?: ""
+            val rawText = response.body?.string() ?: ""
+            val unlockedText = YouTubePlayerUnlock.ensurePlayable(finalUrl, body, rawText, client)
+            val finalText = CommentAvatarFix.apply(finalUrl, unlockedText)
+            val responseCode = if (unlockedText !== rawText && response.code != 200) 200 else response.code
             return Response(
-                response.code,
+                responseCode,
                 response.message,
                 response.headers.toMultimap(),
-                // Comment avatars: see CommentAvatarFix.
-                CommentAvatarFix.apply(finalUrl, text),
+                finalText,
                 finalUrl
             )
         }

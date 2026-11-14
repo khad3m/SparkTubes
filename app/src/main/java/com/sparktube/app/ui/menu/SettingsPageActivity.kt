@@ -3,20 +3,29 @@ package com.sparktube.app.ui.menu
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.sparktube.app.BuildConfig
 import com.sparktube.app.R
 import com.sparktube.app.data.LocalStore
+import com.sparktube.app.data.YtRepository
+import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.databinding.ActivitySettingsPageBinding
 import com.sparktube.app.download.DownloadCenter
@@ -24,14 +33,19 @@ import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.CrashReporter
 import com.sparktube.app.util.Themes
+import com.sparktube.app.util.UpdateChecker
+import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * One full settings PAGE per area (general / video / music) — the menu used
- * to cram these into short-lived bottom sheets, now each area gets its own
- * screen with a back arrow, like the official YouTube app's settings.
+ * Full settings page per area (general / video / music) with glassmorphic rows,
+ * Local Storage & Custom Download Folder selector (System Folder Picker + Custom Path),
+ * Settings-controlled In-App Update check (auto-check toggle + manual check),
+ * Bangla Auto-Translate Subtitles default setting, SponsorBlock auto-skip toggle,
+ * and Smooth Audio Crossfade selector.
  */
 class SettingsPageActivity : AppCompatActivity() {
 
@@ -39,6 +53,47 @@ class SettingsPageActivity : AppCompatActivity() {
 
     private val pageType: Int by lazy {
         intent.getIntExtra(EXTRA_TYPE, TYPE_GENERAL)
+    }
+
+    private val folderTreeLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        if (treeUri != null) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            val resolvedPath = resolveTreeUriToFilePath(treeUri)
+            AppPrefs.customDownloadTreeUri = treeUri.toString()
+            AppPrefs.customDownloadPath = resolvedPath
+            AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_CUSTOM
+            Toast.makeText(
+                this,
+                "Download folder set to: $resolvedPath",
+                Toast.LENGTH_SHORT
+            ).show()
+            render()
+        }
+    }
+
+    private fun resolveTreeUriToFilePath(treeUri: Uri): String {
+        return runCatching {
+            val docId = DocumentsContract.getTreeDocumentId(treeUri)
+            val split = docId.split(":")
+            val type = split.getOrNull(0).orEmpty()
+            val rel = split.getOrNull(1).orEmpty()
+            if (type.equals("primary", ignoreCase = true)) {
+                val base = Environment.getExternalStorageDirectory().absolutePath
+                if (rel.isBlank()) base else "$base/$rel"
+            } else {
+                val extBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
+                if (rel.isNotBlank()) "/storage/$type/$rel" else "$extBase/SparkTube"
+            }
+        }.getOrElse {
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SparkTube").absolutePath
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,8 +114,6 @@ class SettingsPageActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Theme / accent change while a picker dialog was up (or the app was
-        // backgrounded): rebuild the page with fresh colors.
         if (Themes.recreateIfNeeded(this)) return
         render()
     }
@@ -78,6 +131,14 @@ class SettingsPageActivity : AppCompatActivity() {
     // ----- General -----
 
     private fun renderGeneral(content: LinearLayout) {
+        content.addView(
+            menuRow(
+                getString(R.string.youtube_account_title),
+                YouTubeAuth.accountSummary()
+            ) {
+                showYouTubeAccountDialog()
+            }
+        )
         content.addView(
             menuRow(getString(R.string.settings_theme), themeLabel()) {
                 showThemePicker()
@@ -97,14 +158,38 @@ class SettingsPageActivity : AppCompatActivity() {
                 render()
             }
         )
-        // Local crash logs (Firebase-free crash reporting) — see
-        // util/CrashReporter.kt. Row shows how many reports are on the device.
+        content.addView(
+            menuRow(
+                getString(R.string.settings_download_folder),
+                AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
+            ) {
+                showDownloadFolderPicker()
+            }
+        )
+        // Settings-controlled In-App Update toggle
+        content.addView(
+            menuRow(
+                "Auto check for updates",
+                if (AppPrefs.autoCheckUpdates) getString(R.string.on) else getString(R.string.off)
+            ) {
+                AppPrefs.autoCheckUpdates = !AppPrefs.autoCheckUpdates
+                render()
+            }
+        )
+        // Manual In-App Update trigger right inside Settings
+        content.addView(
+            menuRow(
+                getString(R.string.menu_check_update),
+                "v${BuildConfig.VERSION_NAME}"
+            ) {
+                checkForUpdatesNow()
+            }
+        )
         content.addView(
             menuRow(getString(R.string.settings_crash_logs), crashLogCountLabel()) {
                 showCrashLogsSheet()
             }
         )
-        // "Clear data" lives here now — it used to be a stray menu card.
         content.addView(
             menuRow(getString(R.string.menu_clear_data), "") {
                 showClearDataSheet()
@@ -112,17 +197,139 @@ class SettingsPageActivity : AppCompatActivity() {
         )
     }
 
-    // ----- Crash logs (local crash reporting viewer) -----
+    private fun showYouTubeAccountDialog() {
+        if (!YouTubeAuth.isLoggedIn()) {
+            YouTubeLoginActivity.start(this)
+            return
+        }
+        val options = arrayOf(
+            getString(R.string.youtube_account_relogin),
+            getString(R.string.youtube_account_sign_out)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.youtube_account_connected)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> YouTubeLoginActivity.start(this)
+                    1 -> {
+                        YouTubeAuth.clearSession()
+                        YtRepository.clearCache()
+                        render()
+                        Toast.makeText(this, R.string.youtube_signed_out_toast, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
 
-    /** Value label for the Crash logs row — number of reports on the device. */
+    private fun showDownloadFolderPicker() {
+        val options = arrayOf(
+            getString(R.string.download_folder_public),
+            getString(R.string.download_folder_media),
+            "Browse & pick custom folder (System Picker)…",
+            "Type custom folder path…",
+            getString(R.string.download_folder_private)
+        )
+        val currentIdx = when (AppPrefs.downloadFolderMode) {
+            AppPrefs.FOLDER_MODE_PUBLIC_MEDIA -> 1
+            AppPrefs.FOLDER_MODE_CUSTOM -> 2
+            AppPrefs.FOLDER_MODE_APP_PRIVATE -> 4
+            else -> 0
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_download_folder)
+            .setSingleChoiceItems(options, currentIdx) { dialog, which ->
+                dialog.dismiss()
+                when (which) {
+                    0 -> {
+                        AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_PUBLIC_DOWNLOADS
+                        render()
+                    }
+                    1 -> {
+                        AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_PUBLIC_MEDIA
+                        render()
+                    }
+                    2 -> {
+                        runCatching {
+                            folderTreeLauncher.launch(null)
+                        }.onFailure {
+                            showCustomPathDialog()
+                        }
+                    }
+                    3 -> {
+                        showCustomPathDialog()
+                    }
+                    4 -> {
+                        AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_APP_PRIVATE
+                        render()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showCustomPathDialog() {
+        val defaultPath = runCatching {
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SparkTube").absolutePath
+        }.getOrDefault("/storage/emulated/0/Download/SparkTube")
+        val input = EditText(this).apply {
+            setText(AppPrefs.customDownloadPath.ifBlank { defaultPath })
+            setSelection(text.length)
+            setSingleLine()
+        }
+        val wrap = FrameLayout(this).apply {
+            setPadding(dp(22), dp(10), dp(22), 0)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.download_folder_custom)
+            .setView(wrap)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val entered = input.text?.toString()?.trim().orEmpty()
+                if (entered.isNotBlank()) {
+                    val dir = File(entered)
+                    runCatching { dir.mkdirs() }
+                    AppPrefs.customDownloadPath = dir.absolutePath
+                    AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_CUSTOM
+                    Toast.makeText(this, "Download folder: ${dir.absolutePath}", Toast.LENGTH_SHORT).show()
+                    render()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun checkForUpdatesNow() {
+        Toast.makeText(this, R.string.checking_update, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val latest = UpdateChecker.fetchLatest()
+            if (isFinishing || isDestroyed) return@launch
+            if (latest == null) {
+                Toast.makeText(this@SettingsPageActivity, R.string.update_check_failed, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            if (UpdateChecker.isNewer(BuildConfig.VERSION_NAME, latest.tag)) {
+                AlertDialog.Builder(this@SettingsPageActivity)
+                    .setTitle("${getString(R.string.update_available_title)} (${latest.tag})")
+                    .setMessage(latest.body.ifBlank { latest.name })
+                    .setPositiveButton(R.string.update_download) { _, _ ->
+                        UpdateChecker.openDownload(this@SettingsPageActivity, latest)
+                    }
+                    .setNegativeButton(R.string.later, null)
+                    .show()
+            } else {
+                Toast.makeText(this@SettingsPageActivity, R.string.up_to_date, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // ----- Crash logs -----
+
     private fun crashLogCountLabel(): String =
         CrashReporter.listLogs(this).size.toString()
 
-    /**
-     * Bottom sheet listing every crash report saved on the device. Tap a row
-     * to share that log file (e.g. to the developer via Telegram); Share all
-     * sends everything at once; Delete all removes the files.
-     */
     private fun showCrashLogsSheet() {
         val logs = CrashReporter.listLogs(this)
         val sheet = BottomSheetDialog(this)
@@ -157,7 +364,6 @@ class SettingsPageActivity : AppCompatActivity() {
                 }
             )
         } else {
-            // Share-all + Delete-all side by side.
             val actions = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -197,7 +403,6 @@ class SettingsPageActivity : AppCompatActivity() {
         sheet.show()
     }
 
-    /** One crash log row: file name bold, size + date below. Tap = share. */
     private fun crashLogRow(
         log: CrashReporter.CrashLogFile,
         onClick: () -> Unit
@@ -207,10 +412,7 @@ class SettingsPageActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Themes.elevatedColor(this@SettingsPageActivity))
-            }
+            setBackgroundResource(R.drawable.bg_card_soft)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).also { it.topMargin = dp(10) }
@@ -235,7 +437,6 @@ class SettingsPageActivity : AppCompatActivity() {
             )
         }
 
-    /** Small pill-shaped action button used at the top of the sheet. */
     private fun crashSheetAction(label: String, onClick: () -> Unit): TextView =
         TextView(this).apply {
             text = label
@@ -246,10 +447,7 @@ class SettingsPageActivity : AppCompatActivity() {
             setPadding(dp(10), dp(10), dp(10), dp(10))
             setTextColor(getColor(R.color.on_surface))
             setTypeface(null, Typeface.BOLD)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Themes.elevatedColor(this@SettingsPageActivity))
-            }
+            setBackgroundResource(R.drawable.bg_card_soft)
             setOnClickListener { onClick() }
         }
 
@@ -305,7 +503,7 @@ class SettingsPageActivity : AppCompatActivity() {
             .show()
     }
 
-    // ----- Clear data (moved here from the menu) -----
+    // ----- Clear data -----
 
     private fun showClearDataSheet() {
         val sheet = BottomSheetDialog(this)
@@ -328,10 +526,7 @@ class SettingsPageActivity : AppCompatActivity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(14), dp(14), dp(14), dp(14))
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(12).toFloat()
-                        setColor(Themes.elevatedColor(this@SettingsPageActivity))
-                    }
+                    setBackgroundResource(R.drawable.bg_card_soft)
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).also { it.topMargin = dp(10) }
@@ -410,6 +605,14 @@ class SettingsPageActivity : AppCompatActivity() {
 
     private fun renderVideo(content: LinearLayout) {
         content.addView(
+            menuRow(
+                getString(R.string.youtube_account_title),
+                YouTubeAuth.accountSummary()
+            ) {
+                showYouTubeAccountDialog()
+            }
+        )
+        content.addView(
             menuRow(getString(R.string.settings_default_quality_wifi), wifiQualityLabel()) {
                 showDefaultQualityPicker(forWifi = true)
             }
@@ -417,6 +620,19 @@ class SettingsPageActivity : AppCompatActivity() {
         content.addView(
             menuRow(getString(R.string.settings_default_quality_data), dataQualityLabel()) {
                 showDefaultQualityPicker(forWifi = false)
+            }
+        )
+        content.addView(
+            menuRow(
+                getString(R.string.settings_download_folder),
+                AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
+            ) {
+                showDownloadFolderPicker()
+            }
+        )
+        content.addView(
+            menuRow(getString(R.string.subtitles_section), subtitleModeLabel()) {
+                showSubtitleModePicker()
             }
         )
         content.addView(
@@ -437,14 +653,44 @@ class SettingsPageActivity : AppCompatActivity() {
                 render()
             }
         )
+        content.addView(
+            menuRow(
+                "SponsorBlock (Auto-skip sponsors & intros)",
+                if (AppPrefs.sponsorBlock) getString(R.string.on) else getString(R.string.off)
+            ) {
+                AppPrefs.sponsorBlock = !AppPrefs.sponsorBlock
+                render()
+            }
+        )
     }
 
     // ----- Music -----
 
     private fun renderMusic(content: LinearLayout) {
         content.addView(
+            menuRow(
+                getString(R.string.youtube_account_title),
+                YouTubeAuth.accountSummary()
+            ) {
+                showYouTubeAccountDialog()
+            }
+        )
+        content.addView(
             menuRow(getString(R.string.settings_audio_quality), audioQualityLabel()) {
                 showAudioQualityPicker()
+            }
+        )
+        content.addView(
+            menuRow(
+                getString(R.string.settings_download_folder),
+                AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
+            ) {
+                showDownloadFolderPicker()
+            }
+        )
+        content.addView(
+            menuRow(getString(R.string.settings_crossfade), crossfadeLabel()) {
+                showCrossfadePicker()
             }
         )
         content.addView(
@@ -459,7 +705,53 @@ class SettingsPageActivity : AppCompatActivity() {
         )
     }
 
-    // ----- Pickers (theme / accent / quality) -----
+    // ----- Pickers -----
+
+    private fun subtitleModeLabel(): String = when (AppPrefs.subtitleMode) {
+        AppPrefs.SUBTITLE_MODE_BANGLA -> getString(R.string.subtitles_bangla_auto)
+        AppPrefs.SUBTITLE_MODE_ORIGINAL -> getString(R.string.subtitles_original)
+        else -> getString(R.string.subtitles_off)
+    }
+
+    private fun showSubtitleModePicker() {
+        val options = listOf(
+            AppPrefs.SUBTITLE_MODE_BANGLA to getString(R.string.subtitles_bangla_auto),
+            AppPrefs.SUBTITLE_MODE_ORIGINAL to getString(R.string.subtitles_original),
+            AppPrefs.SUBTITLE_MODE_OFF to getString(R.string.subtitles_off)
+        )
+        val current = options.indexOfFirst { it.first == AppPrefs.subtitleMode }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.subtitles_section)
+            .setSingleChoiceItems(options.map { it.second }.toTypedArray(), if (current >= 0) current else 0) { dialog, which ->
+                AppPrefs.subtitleMode = options[which].first
+                dialog.dismiss()
+                render()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun crossfadeLabel(): String {
+        val sec = AppPrefs.crossfadeSeconds
+        return if (sec <= 0) getString(R.string.crossfade_off) else getString(R.string.crossfade_fmt, sec)
+    }
+
+    private fun showCrossfadePicker() {
+        val options = listOf(0, 2, 4, 6, 8)
+        val labels = options.map {
+            if (it == 0) getString(R.string.crossfade_off) else getString(R.string.crossfade_fmt, it)
+        }.toTypedArray()
+        val current = options.indexOfFirst { it == AppPrefs.crossfadeSeconds }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_crossfade)
+            .setSingleChoiceItems(labels, if (current >= 0) current else 2) { dialog, which ->
+                AppPrefs.crossfadeSeconds = options[which]
+                dialog.dismiss()
+                render()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
 
     private fun themeLabel(): String = when (AppPrefs.theme) {
         AppPrefs.THEME_LIGHT -> getString(R.string.theme_light)
@@ -528,7 +820,6 @@ class SettingsPageActivity : AppCompatActivity() {
 
     private fun dataQualityLabel(): String = qualityValueLabel(AppPrefs.defaultVideoHeightData)
 
-    /** @param forWifi true = the Wi-Fi default, false = the mobile-data default. */
     private fun showDefaultQualityPicker(forWifi: Boolean) {
         val choices = listOf(0, 2160, 1440, 1080, 720, 480, 360)
         val labels = choices.map {
@@ -578,12 +869,8 @@ class SettingsPageActivity : AppCompatActivity() {
             .show()
     }
 
-    // ----- Row builder -----
+    // ----- Glass Row builder -----
 
-    /**
-     * A full-width settings row: main label on the left, the current value
-     * on the right — visually a continuation of the menu cards.
-     */
     private fun menuRow(mainLabel: String, valueLabel: String, onClick: () -> Unit): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -591,10 +878,7 @@ class SettingsPageActivity : AppCompatActivity() {
             setPadding(dp(16), dp(15), dp(16), dp(15))
             isClickable = true
             isFocusable = true
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Themes.elevatedColor(this@SettingsPageActivity))
-            }
+            setBackgroundResource(R.drawable.bg_card_soft)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).also { it.topMargin = dp(10) }

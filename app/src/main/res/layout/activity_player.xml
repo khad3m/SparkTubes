@@ -5,6 +5,18 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_ambient">
 
+    <!-- YouTube Ambient Cinema Glow (Ambilight halo behind & below the 16:9 player) -->
+    <View
+        android:id="@+id/ambientCinemaGlow"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginBottom="-42dp"
+        android:alpha="0.75"
+        app:layout_constraintBottom_toBottomOf="@id/playerView"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="@id/playerView" />
+
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="0dp"
@@ -19,6 +31,92 @@
         app:show_timeout="3500"
         app:surface_type="texture_view"
         app:use_controller="true" />
+
+    <!-- Live Bangla Auto-Translate & Original Subtitle Frosted Glass Banner -->
+    <TextView
+        android:id="@+id/subtitleBanner"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="20dp"
+        android:layout_marginEnd="20dp"
+        android:layout_marginBottom="48dp"
+        android:background="@drawable/bg_duration_glass"
+        android:elevation="12dp"
+        android:gravity="center"
+        android:lineSpacingExtra="2dp"
+        android:maxWidth="540dp"
+        android:paddingStart="14dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="6dp"
+        android:shadowColor="#CC000000"
+        android:shadowDx="0"
+        android:shadowDy="1"
+        android:shadowRadius="3"
+        android:textColor="@color/white"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@id/playerView"
+        app:layout_constraintEnd_toEndOf="@id/playerView"
+        app:layout_constraintStart_toStartOf="@id/playerView" />
+
+    <!-- Screen Lock Pill Button (shown when screen is locked & user taps the video) -->
+    <LinearLayout
+        android:id="@+id/unlockScreenButton"
+        android:layout_width="wrap_content"
+        android:layout_height="40dp"
+        android:layout_marginBottom="16dp"
+        android:background="@drawable/bg_mode_switch_capsule"
+        android:clickable="true"
+        android:elevation="24dp"
+        android:focusable="true"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@id/playerView"
+        app:layout_constraintEnd_toEndOf="@id/playerView"
+        app:layout_constraintStart_toStartOf="@id/playerView">
+
+        <ImageView
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_lock_open"
+            app:tint="?attr/accent" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="@string/tap_to_unlock"
+            android:textColor="@color/white"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Double-Tap Seek & Long-Press 2x Speed Pill Indicator -->
+    <TextView
+        android:id="@+id/gestureSeekPill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:background="@drawable/bg_duration_glass"
+        android:elevation="14dp"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:text="⏩ 2.0x Speed"
+        android:textColor="@color/white"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="@id/playerView" />
 
     <!-- Brightness / volume HUD (swipe left / right side of the video) -->
     <LinearLayout
@@ -70,7 +168,7 @@
     <LinearLayout
         android:id="@+id/topLeftModeSwitcher"
         android:layout_width="wrap_content"
-        android:layout_height="38dp"
+        android:layout_height="36dp"
         android:layout_marginStart="10dp"
         android:layout_marginTop="8dp"
         android:background="@drawable/bg_mode_switch_capsule"
@@ -81,7 +179,6 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
-        <!-- Mini Button 1: Music / Audio Player -->
         <LinearLayout
             android:id="@+id/miniMusicBtn"
             android:layout_width="wrap_content"
@@ -97,8 +194,8 @@
 
             <ImageView
                 android:id="@+id/miniMusicIcon"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
+                android:layout_width="15dp"
+                android:layout_height="15dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_headset"
                 app:tint="#CCFFFFFF" />
@@ -114,7 +211,6 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- Mini Button 2: Video Player (Active on Video Screen) -->
         <LinearLayout
             android:id="@+id/miniVideoBtn"
             android:layout_width="wrap_content"
@@ -131,8 +227,8 @@
 
             <ImageView
                 android:id="@+id/miniVideoIcon"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
+                android:layout_width="15dp"
+                android:layout_height="15dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_video_cam"
                 app:tint="@color/white" />
@@ -175,6 +271,34 @@
         app:layout_constraintTop_toTopOf="parent"
         app:tint="@color/white" />
 
+    <!-- Screen Lock Button -->
+    <ImageButton
+        android:id="@+id/lockButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:contentDescription="@string/action_screen_lock"
+        android:padding="13dp"
+        android:src="@drawable/ic_lock"
+        android:visibility="gone"
+        app:layout_constraintEnd_toStartOf="@id/fullscreenButton"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/white" />
+
+    <!-- Bangla Auto-Translate Subtitles (CC) Button -->
+    <ImageButton
+        android:id="@+id/ccButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:contentDescription="@string/subtitles_section"
+        android:padding="13dp"
+        android:src="@drawable/ic_subtitles"
+        android:visibility="gone"
+        app:layout_constraintEnd_toStartOf="@id/lockButton"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/white" />
+
     <ImageButton
         android:id="@+id/scaleButton"
         android:layout_width="48dp"
@@ -183,9 +307,80 @@
         android:padding="12dp"
         android:contentDescription="@string/action_scale_mode"
         android:src="@drawable/ic_tune"
-        app:layout_constraintEnd_toStartOf="@id/fullscreenButton"
+        app:layout_constraintEnd_toStartOf="@id/ccButton"
         app:layout_constraintTop_toTopOf="parent"
         app:tint="@color/white" />
+
+    <!-- Fullscreen Upper-Right "More Videos Grid" Button -->
+    <ImageButton
+        android:id="@+id/fullscreenVideosGridBtn"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:contentDescription="More videos grid"
+        android:padding="13dp"
+        android:src="@drawable/ic_grid_videos"
+        android:visibility="gone"
+        app:layout_constraintEnd_toStartOf="@id/scaleButton"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/white" />
+
+    <!-- Fullscreen Semi-Transparent Scrollable Video Card Grid Overlay Drawer (Right Side) -->
+    <LinearLayout
+        android:id="@+id/fullscreenGridOverlay"
+        android:layout_width="340dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/bg_fullscreen_drawer_glass"
+        android:clickable="true"
+        android:elevation="22dp"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="4dp"
+            android:paddingBottom="8dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="More Videos"
+                android:textColor="@color/white"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/closeFullscreenGridBtn"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/cd_close"
+                android:padding="6dp"
+                android:src="@drawable/ic_close"
+                app:tint="@color/white" />
+        </LinearLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/fullscreenGridRecycler"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:overScrollMode="never"
+            android:scrollbars="vertical" />
+    </LinearLayout>
 
     <androidx.core.widget.NestedScrollView
         android:id="@+id/scrollArea"
@@ -219,7 +414,6 @@
                 android:textSize="19sp"
                 android:textStyle="bold" />
 
-            <!-- Views + date + foldable description (tap to expand / collapse). -->
             <LinearLayout
                 android:id="@+id/descCard"
                 android:layout_width="match_parent"
@@ -257,7 +451,7 @@
                         android:paddingTop="2dp"
                         android:paddingEnd="8dp"
                         android:paddingBottom="2dp"
-                        android:text="HD · AUDIO/VIDEO"
+                        android:text="HD · AMBIENT"
                         android:textColor="?attr/accent"
                         android:textSize="10sp"
                         android:textStyle="bold" />
@@ -294,7 +488,6 @@
                     android:textStyle="bold" />
             </LinearLayout>
 
-            <!-- Premium Glass Channel Bar -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -388,6 +581,37 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/actionLikesDislikes"
+                        style="@style/ActionPill">
+
+                        <ImageView
+                            style="@style/ActionPillIcon"
+                            android:src="@drawable/ic_thumb_up"
+                            app:tint="@color/on_surface" />
+
+                        <TextView
+                            android:id="@+id/actionLikesDislikesLabel"
+                            style="@style/ActionPillText"
+                            android:text="Likes" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/actionSubtitles"
+                        style="@style/ActionPill">
+
+                        <ImageView
+                            android:id="@+id/actionSubtitlesIcon"
+                            style="@style/ActionPillIcon"
+                            android:src="@drawable/ic_subtitles"
+                            app:tint="?attr/accent" />
+
+                        <TextView
+                            android:id="@+id/actionSubtitlesLabel"
+                            style="@style/ActionPillText"
+                            android:text="@string/subtitles_bangla_auto" />
+                    </LinearLayout>
+
+                    <LinearLayout
                         android:id="@+id/actionBackground"
                         style="@style/ActionPill">
 
@@ -461,7 +685,56 @@
                 </LinearLayout>
             </HorizontalScrollView>
 
-            <!-- Comments entry: count + top comment preview, opens the sheet. -->
+            <!-- Live Offline Download Progress Bar Card on Video Player -->
+            <LinearLayout
+                android:id="@+id/downloadProgressContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_card_soft"
+                android:orientation="vertical"
+                android:paddingStart="14dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="10dp"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/downloadProgressLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/download_status_running"
+                        android:textColor="@color/on_surface"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/downloadBytesLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <ProgressBar
+                    android:id="@+id/downloadProgressBar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="6dp"
+                    android:layout_marginTop="6dp"
+                    android:max="100"
+                    android:progress="0"
+                    android:progressDrawable="@drawable/np_scrubber" />
+            </LinearLayout>
+
             <LinearLayout
                 android:id="@+id/commentsCard"
                 android:layout_width="match_parent"
@@ -553,10 +826,10 @@
 
             <View
                 android:layout_width="match_parent"
-                android:layout_height="1dp"
+                android:layout_height="0.5dp"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="8dp"
-                android:alpha="0.35"
+                android:alpha="0.25"
                 android:background="@color/outline" />
 
             <TextView
@@ -614,8 +887,16 @@
             android:id="@+id/retryButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="10dp"
             android:text="@string/retry"
+            android:visibility="visible" />
+
+        <Button
+            android:id="@+id/errorSignInButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/youtube_unlock_sign_in_btn"
             android:visibility="gone" />
     </LinearLayout>
 </androidx.constraintlayout.widget.ConstraintLayout>

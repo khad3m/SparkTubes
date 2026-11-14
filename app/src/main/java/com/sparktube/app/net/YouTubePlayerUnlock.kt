@@ -1,0 +1,374 @@
+package com.sparktube.app.net
+
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Collections
+
+/**
+ * Multi-Client InnerTube Unlock Engine:
+ *
+ * 1. Injects `"contentCheckOk": true` and `"racyCheckOk": true` into outgoing
+ *    `/youtubei/v1/player` and `/youtubei/v1/next` JSON bodies.
+ * 2. Inspects `/youtubei/v1/player` responses inside [OkHttpDownloader].
+ *    Whenever a video returns `LOGIN_REQUIRED`, `AGE_VERIFICATION_REQUIRED`,
+ *    `UNPLAYABLE`, or lacks direct playable `url` streams in `streamingData`,
+ *    automatically queries fallback InnerTube clients:
+ *    - `ANDROID_VR` (`1.60.19` — bypasses bot-check & JS cipher, returns direct URLs)
+ *    - `TVHTML5_SIMPLY_EMBEDDED_PLAYER` (`2.0` — bypasses age-restriction & login gates,
+ *      with user's Google `SAPISIDHASH` cookies when signed in)
+ *    - `IOS` (`19.45.4` — direct progressive/adaptive streams)
+ *    - `ANDROID_TESTSUITE` (`1.9`)
+ *    and merges the unlocked `streamingData`, `playabilityStatus`, `videoDetails`,
+ *    and `microformat` back into the response so `NewPipeExtractor` succeeds seamlessly.
+ */
+object YouTubePlayerUnlock {
+
+    private const val PLAYER_ENDPOINT = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+    private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTypeOrNull()
+
+    private val forcedVideoIds: MutableSet<String> =
+        Collections.synchronizedSet(HashSet<String>())
+
+    fun forceUnlockForUrl(url: String) {
+        val id = extractVideoIdFromUrl(url)
+        if (!id.isNullOrBlank()) {
+            forcedVideoIds.add(id)
+        }
+    }
+
+    private fun extractVideoIdFromUrl(url: String): String? {
+        return Regex("(?:v=|youtu\\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
+            .find(url)?.groupValues?.getOrNull(1)
+    }
+
+    fun patchOutgoingRequestBody(url: String, body: ByteArray?): ByteArray? {
+        if (body == null || body.isEmpty()) return body
+        if (!url.contains("/youtubei/v1/player") && !url.contains("/youtubei/v1/next")) {
+            return body
+        }
+        return runCatching {
+            val json = JSONObject(String(body, Charsets.UTF_8))
+            var modified = false
+            if (!json.optBoolean("contentCheckOk", false)) {
+                json.put("contentCheckOk", true)
+                modified = true
+            }
+            if (!json.optBoolean("racyCheckOk", false)) {
+                json.put("racyCheckOk", true)
+                modified = true
+            }
+            if (modified) json.toString().toByteArray(Charsets.UTF_8) else body
+        }.getOrDefault(body)
+    }
+
+    fun ensurePlayable(
+        url: String,
+        requestBody: ByteArray?,
+        responseBody: String,
+        httpClient: OkHttpClient
+    ): String {
+        if (!url.contains("/youtubei/v1/player")) return responseBody
+        return runCatching {
+            val reqJson = requestBody?.takeIf { it.isNotEmpty() }
+                ?.let { runCatching { JSONObject(String(it, Charsets.UTF_8)) }.getOrNull() }
+            val origJson = runCatching { JSONObject(responseBody) }.getOrNull()
+
+            val videoId = reqJson?.optString("videoId")?.takeIf { it.isNotBlank() }
+                ?: origJson?.optJSONObject("videoDetails")?.optString("videoId")?.takeIf { it.isNotBlank() }
+                ?: return responseBody
+
+            val forceUnlock = forcedVideoIds.remove(videoId)
+            if (!forceUnlock && origJson != null && isPlayableWithDirectUrls(origJson)) {
+                normalizePlayerJson(origJson, null, videoId)
+                return origJson.toString()
+            }
+
+            val loggedIn = YouTubeAuth.isLoggedIn()
+            val candidates = if (loggedIn) {
+                listOf(
+                    FallbackSpec("ANDROID_VR", useCookies = true),
+                    FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
+                    FallbackSpec("ANDROID_VR", useCookies = false),
+                    FallbackSpec("IOS", useCookies = false),
+                    FallbackSpec("WEB_AUTH", useCookies = true),
+                    FallbackSpec("ANDROID_TESTSUITE", useCookies = false)
+                )
+            } else {
+                listOf(
+                    FallbackSpec("ANDROID_VR", useCookies = false),
+                    FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = false),
+                    FallbackSpec("IOS", useCookies = false),
+                    FallbackSpec("ANDROID_TESTSUITE", useCookies = false)
+                )
+            }
+
+            var bestFallback: JSONObject? = null
+            for (spec in candidates) {
+                val fb = fetchFallbackPlayer(videoId, spec, httpClient) ?: continue
+                if (isPlayableWithDirectUrls(fb)) {
+                    bestFallback = fb
+                    break
+                }
+                if (bestFallback == null && hasAnyStreamingData(fb)) {
+                    bestFallback = fb
+                }
+            }
+
+            if (bestFallback != null) {
+                normalizePlayerJson(bestFallback, origJson, videoId)
+                bestFallback.toString()
+            } else {
+                responseBody
+            }
+        }.getOrDefault(responseBody)
+    }
+
+    private data class FallbackSpec(
+        val kind: String,
+        val useCookies: Boolean
+    )
+
+    private fun isPlayableWithDirectUrls(root: JSONObject): Boolean {
+        val status = root.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
+        if (!status.equals("OK", ignoreCase = true)) return false
+        val sd = root.optJSONObject("streamingData") ?: return false
+        var directVideo = 0
+        var directAudio = 0
+
+        val adaptive = sd.optJSONArray("adaptiveFormats")
+        if (adaptive != null) {
+            for (i in 0 until adaptive.length()) {
+                val fmt = adaptive.optJSONObject(i) ?: continue
+                val u = fmt.optString("url", "")
+                if (!u.startsWith("http")) continue
+                val mime = fmt.optString("mimeType", "")
+                if (mime.startsWith("video/")) directVideo++
+                else if (mime.startsWith("audio/")) directAudio++
+            }
+        }
+        val muxed = sd.optJSONArray("formats")
+        if (muxed != null) {
+            for (i in 0 until muxed.length()) {
+                val fmt = muxed.optJSONObject(i) ?: continue
+                val u = fmt.optString("url", "")
+                if (u.startsWith("http")) {
+                    directVideo++
+                    directAudio++
+                }
+            }
+        }
+        return directVideo > 0 && directAudio > 0
+    }
+
+    private fun hasAnyStreamingData(root: JSONObject): Boolean {
+        val status = root.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
+        if (!status.equals("OK", ignoreCase = true)) return false
+        val sd = root.optJSONObject("streamingData") ?: return false
+        val adaptiveLen = sd.optJSONArray("adaptiveFormats")?.length() ?: 0
+        val formatsLen = sd.optJSONArray("formats")?.length() ?: 0
+        return adaptiveLen > 0 || formatsLen > 0
+    }
+
+    private fun fetchFallbackPlayer(
+        videoId: String,
+        spec: FallbackSpec,
+        httpClient: OkHttpClient
+    ): JSONObject? = runCatching {
+        val payload = buildClientPayload(videoId, spec.kind)
+        val reqBuilder = Request.Builder()
+            .url(PLAYER_ENDPOINT)
+            .header("Content-Type", "application/json")
+            .header("Accept-Language", "en-US,en;q=0.9")
+
+        when (spec.kind) {
+            "ANDROID_VR" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_ANDROID_VR)
+                reqBuilder.header("X-YouTube-Client-Name", "28")
+                reqBuilder.header("X-YouTube-Client-Version", "1.60.19")
+            }
+            "TVHTML5_SIMPLY_EMBEDDED_PLAYER" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_TV_EMBED)
+                reqBuilder.header("X-YouTube-Client-Name", "85")
+                reqBuilder.header("X-YouTube-Client-Version", "2.0")
+                reqBuilder.header("Origin", "https://www.youtube.com")
+                reqBuilder.header("Referer", "https://www.youtube.com/")
+            }
+            "IOS" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_IOS)
+                reqBuilder.header("X-YouTube-Client-Name", "5")
+                reqBuilder.header("X-YouTube-Client-Version", "19.45.4")
+            }
+            "ANDROID_TESTSUITE" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_ANDROID)
+                reqBuilder.header("X-YouTube-Client-Name", "30")
+                reqBuilder.header("X-YouTube-Client-Version", "1.9")
+            }
+            else -> {
+                reqBuilder.header("User-Agent", OkHttpDownloader.USER_AGENT)
+                reqBuilder.header("X-YouTube-Client-Name", "1")
+                reqBuilder.header("X-YouTube-Client-Version", "2.20250101.01.00")
+                reqBuilder.header("Origin", "https://www.youtube.com")
+                reqBuilder.header("Referer", "https://www.youtube.com/watch?v=$videoId")
+            }
+        }
+
+        if (spec.useCookies && YouTubeAuth.isLoggedIn()) {
+            YouTubeAuth.applyYouTubeAuthToRequest(PLAYER_ENDPOINT, reqBuilder)
+        } else {
+            reqBuilder.header("Cookie", "CONSENT=YES+cb; SOCS=CAI")
+        }
+
+        reqBuilder.post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+
+        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) return@runCatching null
+            val text = resp.body?.string().orEmpty()
+            if (text.isBlank()) return@runCatching null
+            JSONObject(text)
+        }
+    }.getOrNull()
+
+    private fun buildClientPayload(videoId: String, kind: String): JSONObject {
+        val clientObj = when (kind) {
+            "ANDROID_VR" -> JSONObject()
+                .put("clientName", "ANDROID_VR")
+                .put("clientVersion", "1.60.19")
+                .put("androidSdkVersion", 34)
+                .put("osName", "Android")
+                .put("osVersion", "14")
+                .put("deviceMake", "Oculus")
+                .put("deviceModel", "Quest 3")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
+            "TVHTML5_SIMPLY_EMBEDDED_PLAYER" -> JSONObject()
+                .put("clientName", "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
+                .put("clientVersion", "2.0")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
+            "IOS" -> JSONObject()
+                .put("clientName", "IOS")
+                .put("clientVersion", "19.45.4")
+                .put("deviceMake", "Apple")
+                .put("deviceModel", "iPhone16,2")
+                .put("osName", "iPhone")
+                .put("osVersion", "17.5.1.21F90")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
+            "ANDROID_TESTSUITE" -> JSONObject()
+                .put("clientName", "ANDROID_TESTSUITE")
+                .put("clientVersion", "1.9")
+                .put("androidSdkVersion", 34)
+                .put("osName", "Android")
+                .put("osVersion", "14")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
+            else -> JSONObject()
+                .put("clientName", "WEB")
+                .put("clientVersion", "2.20250101.01.00")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+        }
+
+        val contextObj = JSONObject().put("client", clientObj)
+        if (kind == "TVHTML5_SIMPLY_EMBEDDED_PLAYER") {
+            contextObj.put(
+                "thirdParty",
+                JSONObject().put("embedUrl", "https://www.youtube.com/")
+            )
+        }
+
+        return JSONObject()
+            .put("videoId", videoId)
+            .put("contentCheckOk", true)
+            .put("racyCheckOk", true)
+            .put("context", contextObj)
+    }
+
+    private fun normalizePlayerJson(target: JSONObject, fallbackSource: JSONObject?, videoId: String) {
+        // Ensure playabilityStatus is OK
+        target.put("playabilityStatus", JSONObject().put("status", "OK"))
+
+        // Normalize formats and adaptiveFormats so averageBitrate is always present
+        val sd = target.optJSONObject("streamingData")
+        if (sd != null) {
+            normalizeFormatArray(sd.optJSONArray("formats"))
+            normalizeFormatArray(sd.optJSONArray("adaptiveFormats"))
+        }
+
+        // Preserve captions or storyboards from original response if missing in fallback
+        if (fallbackSource != null) {
+            if (!target.has("captions") && fallbackSource.has("captions")) {
+                target.put("captions", fallbackSource.opt("captions"))
+            }
+            if (!target.has("storyboards") && fallbackSource.has("storyboards")) {
+                target.put("storyboards", fallbackSource.opt("storyboards"))
+            }
+            if (!target.has("videoDetails") && fallbackSource.has("videoDetails")) {
+                target.put("videoDetails", fallbackSource.opt("videoDetails"))
+            }
+            if (!target.has("microformat") && fallbackSource.has("microformat")) {
+                target.put("microformat", fallbackSource.opt("microformat"))
+            }
+        }
+
+        // Ensure videoDetails has required fields
+        val vd = target.optJSONObject("videoDetails") ?: JSONObject().also { target.put("videoDetails", it) }
+        if (vd.optString("videoId").isBlank()) vd.put("videoId", videoId)
+        if (vd.optString("title").isBlank()) {
+            val origTitle = fallbackSource?.optJSONObject("videoDetails")?.optString("title").orEmpty()
+            vd.put("title", origTitle.ifBlank { "YouTube Video" })
+        }
+        if (vd.optString("author").isBlank()) {
+            val origAuthor = fallbackSource?.optJSONObject("videoDetails")?.optString("author").orEmpty()
+            vd.put("author", origAuthor.ifBlank { "YouTube" })
+        }
+        if (vd.optString("channelId").isBlank()) {
+            val origCid = fallbackSource?.optJSONObject("videoDetails")?.optString("channelId").orEmpty()
+            vd.put("channelId", origCid.ifBlank { "UC_x5XG1OV2P6uZZ5FSM9Ttw" })
+        }
+
+        // Synthesize microformat.playerMicroformatRenderer if omitted by mobile/VR/TV InnerTube client
+        if (!target.has("microformat")) {
+            val thumbArr = vd.optJSONObject("thumbnail")?.optJSONArray("thumbnails") ?: JSONArray()
+            val mf = JSONObject()
+                .put("title", JSONObject().put("simpleText", vd.optString("title", "YouTube Video")))
+                .put("description", JSONObject().put("simpleText", vd.optString("shortDescription", "")))
+                .put("lengthSeconds", vd.optString("lengthSeconds", "0"))
+                .put("ownerChannelName", vd.optString("author", "YouTube"))
+                .put("externalChannelId", vd.optString("channelId", "UC_x5XG1OV2P6uZZ5FSM9Ttw"))
+                .put("viewCount", vd.optString("viewCount", "0"))
+                .put("category", "Entertainment")
+                .put("publishDate", "2025-01-01")
+                .put("uploadDate", "2025-01-01")
+                .put("thumbnail", JSONObject().put("thumbnails", thumbArr))
+            target.put("microformat", JSONObject().put("playerMicroformatRenderer", mf))
+        }
+    }
+
+    private fun normalizeFormatArray(arr: JSONArray?) {
+        if (arr == null) return
+        for (i in 0 until arr.length()) {
+            val fmt = arr.optJSONObject(i) ?: continue
+            val bitrate = fmt.optInt("bitrate", 0)
+            if (fmt.optInt("averageBitrate", 0) <= 0 && bitrate > 0) {
+                fmt.put("averageBitrate", bitrate)
+            }
+            if (!fmt.has("approxDurationMs")) {
+                fmt.put("approxDurationMs", "0")
+            }
+        }
+    }
+}

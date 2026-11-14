@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Outer soft neon halo -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#59FF0033" />
+            <size android:width="18dp" android:height="18dp" />
+        </shape>
+    </item>
+    <!-- Crisp inner white pearl core -->
+    <item android:left="4dp" android:top="4dp" android:right="4dp" android:bottom="4dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFFFF" />
+            <stroke android:width="1.5dp" android:color="#FFFF0033" />
+        </shape>
+    </item>
+</layer-list>

@@ -2,12 +2,15 @@ package com.sparktube.app.ui.player
 
 import android.content.Context
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.os.Environment
 import android.util.TypedValue
 import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.sparktube.app.R
 import com.sparktube.app.download.DownloadCenter
@@ -15,19 +18,22 @@ import com.sparktube.app.playback.AudioTrackGroup
 import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.playback.StreamCatalog
 import com.sparktube.app.playback.effectiveHeight
+import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Themes
+import org.schabi.newpipe.extractor.stream.AudioStream
+import java.io.File
 
 /**
- * Download picker: Audio only / Video only / Video + Audio, each with a
- * quality list. On the music player only the audio section is shown.
- * Options that were already downloaded appear marked and can't be started
- * again.
+ * Download picker: Audio only / Video + Audio / Video only, each with a
+ * quality list + interactive Download Folder selector (`Download/SparkTube`
+ * or any Custom Folder on local storage).
  */
 class DownloadSheet(
     context: Context,
     private val entry: QueueEntry,
     private val catalog: StreamCatalog,
-    private val audioOnly: Boolean = false
+    private val audioOnly: Boolean = false,
+    private val onDownloadStarted: (() -> Unit)? = null
 ) : BottomSheetDialog(context) {
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(
@@ -39,6 +45,26 @@ class DownloadSheet(
         DownloadCenter.recordsFor(context, entry.url).any {
             it.type == type && it.quality == quality && it.status == DownloadCenter.STATUS_DONE
         }
+
+    /** Whether this exact type + quality is currently downloading or paused. */
+    private fun activeProgress(type: String, quality: String): Int {
+        val rec = DownloadCenter.recordsFor(context, entry.url).firstOrNull {
+            it.type == type && it.quality == quality &&
+                (it.status == DownloadCenter.STATUS_PENDING ||
+                    it.status == DownloadCenter.STATUS_RUNNING ||
+                    it.status == DownloadCenter.STATUS_PAUSED)
+        } ?: return -1
+        return DownloadCenter.recordProgress(rec)
+    }
+
+    private fun audioExtOf(stream: AudioStream): String {
+        val mime = stream.format?.mimeType.orEmpty().lowercase()
+        val suffix = stream.format?.suffix.orEmpty().lowercase()
+        return if (mime.contains("webm") || suffix == "webm" || suffix == "opus") "webm" else "m4a"
+    }
+
+    private fun audioFormatTag(stream: AudioStream): String =
+        if (audioExtOf(stream) == "webm") "Opus" else "M4A"
 
     override fun show() {
         val scroll = android.widget.ScrollView(context)
@@ -62,6 +88,24 @@ class DownloadSheet(
         }
         root.addView(songTitle)
 
+        // Interactive Destination Folder Pill (Local Storage / Custom Folder)
+        val folderPill = TextView(context).apply {
+            text = "📁 Folder: ${AppPrefs.downloadFolderSummary()}  (Tap to change)"
+            textSize = 12f
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+            setTextColor(Themes.accentColor(context))
+            setTypeface(null, Typeface.BOLD)
+            setBackgroundResource(R.drawable.bg_card_soft)
+            layoutParams = marginParams(top = 10)
+        }
+        folderPill.setOnClickListener {
+            showQuickFolderPicker {
+                folderPill.text = "📁 Folder: ${AppPrefs.downloadFolderSummary()}  (Tap to change)"
+            }
+        }
+        root.addView(folderPill)
+
+        val durationSec = catalog.durationSec.takeIf { it > 0L } ?: entry.durationSec
         val musicOnly = audioOnly || !catalog.hasVideo
 
         // ----- Audio only -----
@@ -70,37 +114,52 @@ class DownloadSheet(
             root.addView(sectionTitle(context.getString(R.string.download_audio_section)))
             audioTrack.streams
                 .filter { it.isUrl }
-                .sortedByDescending { it.averageBitrate }
+                .sortedWith(
+                    compareByDescending<AudioStream> { audioExtOf(it) == "m4a" }
+                        .thenByDescending { it.averageBitrate }
+                )
+                .distinctBy { "${it.averageBitrate}_${audioExtOf(it)}" }
                 .forEach { stream ->
-                    // NPE reports the audio average bitrate directly in kbps.
-                    val kbps = if (stream.averageBitrate > 0) {
-                        "${stream.averageBitrate} kbps"
+                    val ext = audioExtOf(stream)
+                    val fmtTag = audioFormatTag(stream)
+                    val qualityKey = if (stream.averageBitrate > 0) {
+                        "${stream.averageBitrate} kbps ($fmtTag)"
                     } else {
-                        "Audio"
+                        "Audio ($fmtTag)"
                     }
-                    val alreadyDone = downloaded(DownloadCenter.TYPE_AUDIO, kbps)
+                    val alreadyDone = downloaded(DownloadCenter.TYPE_AUDIO, qualityKey)
+                    val inFlightPct = activeProgress(DownloadCenter.TYPE_AUDIO, qualityKey)
+                    val rowLabel = when {
+                        alreadyDone -> "$qualityKey • ${context.getString(R.string.download_option_done)}"
+                        inFlightPct >= 0 -> "$qualityKey • ${context.getString(R.string.downloading_fmt, inFlightPct)}"
+                        else -> qualityKey + suffix(audioTrack)
+                    }
                     root.addView(
-                        optionRow(
-                            if (alreadyDone) "$kbps • ${context.getString(R.string.download_option_done)}" else kbps + suffix(audioTrack),
-                            alreadyDone
-                        ) {
-                            if (alreadyDone) {
-                                Toast.makeText(
+                        optionRow(rowLabel, alreadyDone || inFlightPct >= 0) {
+                            when {
+                                alreadyDone -> Toast.makeText(
                                     context, R.string.already_downloaded, Toast.LENGTH_SHORT
                                 ).show()
-                            } else {
-                                DownloadCenter.startSingle(
-                                    context,
-                                    entry.url,
-                                    entry.title,
-                                    entry.uploader,
-                                    entry.thumbnailUrl,
-                                    DownloadCenter.TYPE_AUDIO,
-                                    kbps,
-                                    stream.content,
-                                    "m4a"
-                                )
-                                toastStarted()
+                                inFlightPct >= 0 -> {
+                                    DownloadCenter.togglePauseResumeOrRetry(context, entry.url)
+                                    onDownloadStarted?.invoke()
+                                }
+                                else -> {
+                                    DownloadCenter.startSingle(
+                                        context = context,
+                                        videoUrl = entry.url,
+                                        title = entry.title,
+                                        uploader = entry.uploader,
+                                        thumbUrl = entry.thumbnailUrl,
+                                        type = DownloadCenter.TYPE_AUDIO,
+                                        quality = qualityKey,
+                                        streamUrl = stream.content,
+                                        fileExt = ext,
+                                        durationSec = durationSec
+                                    )
+                                    toastStarted()
+                                    onDownloadStarted?.invoke()
+                                }
                             }
                             dismiss()
                         }
@@ -109,49 +168,7 @@ class DownloadSheet(
         }
 
         if (!musicOnly) {
-            // ----- Video only -----
-            root.addView(sectionTitle(context.getString(R.string.download_video_section)))
-            val videoChoices = if (catalog.videoOnly.isNotEmpty()) {
-                catalog.videoOnly
-            } else {
-                // No adaptive streams: fall back to the muxed list.
-                catalog.muxed
-            }
-            videoChoices.forEach { v ->
-                val label = if (v.isVideoOnly) {
-                    "${v.effectiveHeight()}p (video only, no sound)"
-                } else {
-                    "${v.effectiveHeight()}p (muxed, video + sound)"
-                }
-                val quality = "${v.effectiveHeight()}p"
-                val alreadyDone = downloaded(DownloadCenter.TYPE_VIDEO, quality)
-                root.addView(
-                    optionRow(
-                        if (alreadyDone) "$label • ${context.getString(R.string.download_option_done)}" else label,
-                        alreadyDone
-                    ) {
-                        if (alreadyDone) {
-                            Toast.makeText(context, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
-                        } else {
-                            DownloadCenter.startSingle(
-                                context,
-                                entry.url,
-                                entry.title,
-                                entry.uploader,
-                                entry.thumbnailUrl,
-                                DownloadCenter.TYPE_VIDEO,
-                                quality,
-                                v.content,
-                                "mp4"
-                            )
-                            toastStarted()
-                        }
-                        dismiss()
-                    }
-                )
-            }
-
-            // ----- Video + Audio -----
+            // ----- Video + Audio (Recommended full video with sound) -----
             if (catalog.videoOnly.isNotEmpty() && audioTrack?.best != null) {
                 root.addView(sectionTitle(context.getString(R.string.download_av_section)))
                 val note = TextView(context).apply {
@@ -162,39 +179,173 @@ class DownloadSheet(
                     layoutParams = marginParams()
                 }
                 root.addView(note)
+                val bestM4aAudio = audioTrack.streams
+                    .filter { it.isUrl && audioExtOf(it) == "m4a" }
+                    .maxByOrNull { it.averageBitrate }
+                    ?: audioTrack.best!!
                 catalog.videoOnly.forEach { v ->
                     val quality = "${v.effectiveHeight()}p"
                     val alreadyDone = downloaded(DownloadCenter.TYPE_AV, quality)
+                    val inFlightPct = activeProgress(DownloadCenter.TYPE_AV, quality)
+                    val rowLabel = when {
+                        alreadyDone -> "$quality (Video + Audio) • ${context.getString(R.string.download_option_done)}"
+                        inFlightPct >= 0 -> "$quality (Video + Audio) • ${context.getString(R.string.downloading_fmt, inFlightPct)}"
+                        else -> "$quality (Video + Audio)"
+                    }
                     root.addView(
-                        optionRow(
-                            if (alreadyDone) "$quality • ${context.getString(R.string.download_option_done)}" else quality,
-                            alreadyDone
-                        ) {
-                            if (alreadyDone) {
-                                Toast.makeText(context, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
-                            } else {
-                                DownloadCenter.startPair(
-                                    context,
-                                    entry.url,
-                                    entry.title,
-                                    entry.uploader,
-                                    entry.thumbnailUrl,
-                                    quality,
-                                    v.content,
-                                    audioTrack.best!!.content
-                                )
-                                toastStarted()
+                        optionRow(rowLabel, alreadyDone || inFlightPct >= 0) {
+                            when {
+                                alreadyDone -> Toast.makeText(context, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
+                                inFlightPct >= 0 -> {
+                                    DownloadCenter.togglePauseResumeOrRetry(context, entry.url)
+                                    onDownloadStarted?.invoke()
+                                }
+                                else -> {
+                                    DownloadCenter.startPair(
+                                        context = context,
+                                        videoUrl = entry.url,
+                                        title = entry.title,
+                                        uploader = entry.uploader,
+                                        thumbUrl = entry.thumbnailUrl,
+                                        quality = quality,
+                                        videoStreamUrl = v.content,
+                                        audioStreamUrl = bestM4aAudio.content,
+                                        durationSec = durationSec
+                                    )
+                                    toastStarted()
+                                    onDownloadStarted?.invoke()
+                                }
                             }
                             dismiss()
                         }
                     )
                 }
             }
+
+            // ----- Video only / Muxed -----
+            root.addView(sectionTitle(context.getString(R.string.download_video_section)))
+            val videoChoices = if (catalog.muxed.isNotEmpty()) {
+                catalog.muxed + catalog.videoOnly
+            } else {
+                catalog.videoOnly
+            }
+            videoChoices.forEach { v ->
+                val label = if (v.isVideoOnly) {
+                    "${v.effectiveHeight()}p (video only, no sound)"
+                } else {
+                    "${v.effectiveHeight()}p (muxed MP4, video + sound)"
+                }
+                val quality = if (v.isVideoOnly) "${v.effectiveHeight()}p-vo" else "${v.effectiveHeight()}p"
+                val alreadyDone = downloaded(DownloadCenter.TYPE_VIDEO, quality)
+                val inFlightPct = activeProgress(DownloadCenter.TYPE_VIDEO, quality)
+                val rowLabel = when {
+                    alreadyDone -> "$label • ${context.getString(R.string.download_option_done)}"
+                    inFlightPct >= 0 -> "$label • ${context.getString(R.string.downloading_fmt, inFlightPct)}"
+                    else -> label
+                }
+                root.addView(
+                    optionRow(rowLabel, alreadyDone || inFlightPct >= 0) {
+                        when {
+                            alreadyDone -> Toast.makeText(context, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
+                            inFlightPct >= 0 -> {
+                                DownloadCenter.togglePauseResumeOrRetry(context, entry.url)
+                                onDownloadStarted?.invoke()
+                            }
+                            else -> {
+                                DownloadCenter.startSingle(
+                                    context = context,
+                                    videoUrl = entry.url,
+                                    title = entry.title,
+                                    uploader = entry.uploader,
+                                    thumbUrl = entry.thumbnailUrl,
+                                    type = DownloadCenter.TYPE_VIDEO,
+                                    quality = quality,
+                                    streamUrl = v.content,
+                                    fileExt = "mp4",
+                                    durationSec = durationSec
+                                )
+                                toastStarted()
+                                onDownloadStarted?.invoke()
+                            }
+                        }
+                        dismiss()
+                    }
+                )
+            }
         }
 
         scroll.addView(root)
         setContentView(scroll)
         super.show()
+    }
+
+    private fun showQuickFolderPicker(onUpdated: () -> Unit) {
+        val options = arrayOf(
+            context.getString(R.string.download_folder_public),
+            context.getString(R.string.download_folder_media),
+            context.getString(R.string.download_folder_custom),
+            context.getString(R.string.download_folder_private)
+        )
+        val currentIdx = when (AppPrefs.downloadFolderMode) {
+            AppPrefs.FOLDER_MODE_PUBLIC_MEDIA -> 1
+            AppPrefs.FOLDER_MODE_CUSTOM -> 2
+            AppPrefs.FOLDER_MODE_APP_PRIVATE -> 3
+            else -> 0
+        }
+        AlertDialog.Builder(context)
+            .setTitle(R.string.settings_download_folder)
+            .setSingleChoiceItems(options, currentIdx) { dialog, which ->
+                dialog.dismiss()
+                when (which) {
+                    0 -> {
+                        AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_PUBLIC_DOWNLOADS
+                        onUpdated()
+                    }
+                    1 -> {
+                        AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_PUBLIC_MEDIA
+                        onUpdated()
+                    }
+                    2 -> {
+                        showCustomPathInputDialog(onUpdated)
+                    }
+                    3 -> {
+                        AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_APP_PRIVATE
+                        onUpdated()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showCustomPathInputDialog(onUpdated: () -> Unit) {
+        val defaultBase = runCatching {
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SparkTube").absolutePath
+        }.getOrDefault("/storage/emulated/0/Download/SparkTube")
+        val input = EditText(context).apply {
+            setText(AppPrefs.customDownloadPath.ifBlank { defaultBase })
+            setSelection(text.length)
+            setSingleLine()
+        }
+        val wrap = FrameLayout(context).apply {
+            setPadding(dp(22), dp(10), dp(22), 0)
+            addView(input)
+        }
+        AlertDialog.Builder(context)
+            .setTitle(R.string.download_folder_custom)
+            .setView(wrap)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val entered = input.text?.toString()?.trim().orEmpty()
+                if (entered.isNotBlank()) {
+                    val dir = File(entered)
+                    runCatching { dir.mkdirs() }
+                    AppPrefs.customDownloadPath = dir.absolutePath
+                    AppPrefs.downloadFolderMode = AppPrefs.FOLDER_MODE_CUSTOM
+                    onUpdated()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun sectionTitle(label: String): TextView =
@@ -220,10 +371,7 @@ class DownloadSheet(
                 if (done) Themes.onSurfaceVariantColor(context)
                 else Themes.onSurfaceColor(context)
             )
-            background = GradientDrawable().apply {
-                cornerRadius = dp(10).toFloat()
-                setColor(Themes.elevatedColor(context))
-            }
+            setBackgroundResource(R.drawable.bg_card_soft)
             layoutParams = marginParams(top = 8)
             setOnClickListener { onClick() }
         }
@@ -237,6 +385,10 @@ class DownloadSheet(
     }
 
     private fun toastStarted() {
-        Toast.makeText(context, R.string.download_started, Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            context,
+            "${context.getString(R.string.download_started)} → ${AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")}",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 }

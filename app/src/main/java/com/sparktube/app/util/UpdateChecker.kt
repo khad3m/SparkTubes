@@ -11,7 +11,8 @@ import java.net.URL
 
 /**
  * GitHub release checker: compares the running version against
- * devfahim00/SparkTube's latest release and surfaces title + changelog.
+ * khad3m/SparkTubes (or devfahim00/SparkTube fallback) latest release
+ * and surfaces title + changelog + APK download link.
  */
 object UpdateChecker {
 
@@ -23,47 +24,51 @@ object UpdateChecker {
         val htmlUrl: String
     )
 
-    private const val LATEST_URL =
+    private val LATEST_URLS = listOf(
+        "https://api.github.com/repos/khad3m/SparkTubes/releases/latest",
         "https://api.github.com/repos/devfahim00/SparkTube/releases/latest"
+    )
 
     /** Once per process: the silent on-open check must not nag repeatedly. */
     @Volatile
     var silentCheckDone = false
 
     suspend fun fetchLatest(): Release? = withContext(Dispatchers.IO) {
-        try {
-            val conn = URL(LATEST_URL).openConnection() as HttpURLConnection
-            conn.connectTimeout = 10_000
-            conn.readTimeout = 10_000
-            conn.setRequestProperty("Accept", "application/vnd.github+json")
-            conn.instanceFollowRedirects = true
-            if (conn.responseCode != 200) {
+        for (endpoint in LATEST_URLS) {
+            try {
+                val conn = URL(endpoint).openConnection() as HttpURLConnection
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 10_000
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                conn.instanceFollowRedirects = true
+                if (conn.responseCode != 200) {
+                    conn.disconnect()
+                    continue
+                }
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
-                return@withContext null
-            }
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            conn.disconnect()
-            val json = JSONObject(text)
-            val tag = json.optString("tag_name", "").ifBlank { return@withContext null }
-            val apk = json.optJSONArray("assets")?.let { assets ->
-                (0 until assets.length())
-                    .map { assets.getJSONObject(it) }
-                    .firstOrNull { it.optString("name").endsWith(".apk") }
-                    ?.optString("browser_download_url")
-            }
-            Release(
-                tag = tag,
-                name = json.optString("name").ifBlank { tag },
-                body = json.optString("body"),
-                apkUrl = apk,
-                htmlUrl = json.optString(
-                    "html_url",
-                    "https://github.com/devfahim00/SparkTube/releases"
+                val json = JSONObject(text)
+                val tag = json.optString("tag_name", "").ifBlank { continue }
+                val apk = json.optJSONArray("assets")?.let { assets ->
+                    (0 until assets.length())
+                        .map { assets.getJSONObject(it) }
+                        .firstOrNull { it.optString("name").endsWith(".apk") }
+                        ?.optString("browser_download_url")
+                }
+                return@withContext Release(
+                    tag = tag,
+                    name = json.optString("name").ifBlank { tag },
+                    body = json.optString("body"),
+                    apkUrl = apk,
+                    htmlUrl = json.optString(
+                        "html_url",
+                        "https://github.com/khad3m/SparkTubes/releases"
+                    )
                 )
-            )
-        } catch (e: Exception) {
-            null
+            } catch (_: Exception) {
+            }
         }
+        null
     }
 
     /** "v2.1.0" / "2.1" vs "2.0.0" — numeric part comparison, longer wins ties. */

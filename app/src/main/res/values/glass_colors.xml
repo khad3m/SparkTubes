@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Glassmorphism surfaces (light theme): frosted white over the light background -->
-    <color name="glass_top">#D9FFFFFF</color>
-    <color name="glass_bottom">#8CFFFFFF</color>
-    <color name="glass_stroke">#1F000000</color>
-    <color name="nav_glass_top">#F2FFFFFF</color>
-    <color name="nav_glass_bottom">#D9F5F5F7</color>
-    <color name="glass_sheet">#F2FFFFFF</color>
-    <!-- Accent for small text: passes 4.5:1 on light surfaces (plain #FF0033 is ~4:1) -->
+    <!-- Ultra-transparent Glassmorphism surfaces (light theme): thinner border & airy translucency -->
+    <color name="glass_top">#99FFFFFF</color>
+    <color name="glass_bottom">#4DFFFFFF</color>
+    <color name="glass_stroke">#0D000000</color>
+    <color name="nav_glass_top">#B3FFFFFF</color>
+    <color name="nav_glass_bottom">#80F5F5F7</color>
+    <color name="glass_sheet">#E6FFFFFF</color>
     <color name="accent_text">#D70028</color>
     <color name="np_accent_text">#FF6B81</color>
     <color name="yt_red">#FF0033</color>

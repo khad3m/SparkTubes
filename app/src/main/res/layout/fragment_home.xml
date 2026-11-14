@@ -6,7 +6,7 @@
     android:background="@drawable/bg_ambient"
     android:orientation="vertical">
 
-    <!-- Premium YouTube Glass Header -->
+    <!-- Premium YouTube Glass Header (No Profile Icon in Top-Right Corner) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -14,7 +14,7 @@
         android:paddingStart="16dp"
         android:paddingTop="8dp"
         android:paddingEnd="16dp"
-        android:paddingBottom="10dp">
+        android:paddingBottom="8dp">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -24,14 +24,14 @@
 
             <!-- Brand Play Badge -->
             <FrameLayout
-                android:layout_width="34dp"
-                android:layout_height="34dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
                 android:background="@drawable/bg_circle_red"
                 android:elevation="4dp">
 
                 <ImageView
-                    android:layout_width="18dp"
-                    android:layout_height="18dp"
+                    android:layout_width="17dp"
+                    android:layout_height="17dp"
                     android:layout_gravity="center"
                     android:importantForAccessibility="no"
                     android:src="@drawable/ic_play_arrow"
@@ -74,30 +74,13 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/crash_test_desc"
                 android:src="@drawable/ic_crash_test" />
-
-            <!-- Quick Avatar Badge (Md Khademul Islam) -->
-            <FrameLayout
-                android:id="@+id/headerProfileChip"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
-                android:layout_marginStart="4dp"
-                android:background="@drawable/bg_avatar_glow_ring"
-                android:padding="2dp">
-
-                <com.google.android.material.imageview.ShapeableImageView
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:scaleType="centerCrop"
-                    android:src="@drawable/profile_khademul"
-                    app:shapeAppearanceOverlay="@style/CircleImage" />
-            </FrameLayout>
         </LinearLayout>
 
-        <!-- Glass search field: one big, obvious tap target -->
+        <!-- Ultra-transparent Glass search field -->
         <LinearLayout
             android:id="@+id/searchButton"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
+            android:layout_height="46dp"
             android:layout_marginTop="10dp"
             android:background="@drawable/bg_search_glass"
             android:clickable="true"
@@ -109,8 +92,8 @@
             android:paddingEnd="14dp">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="19dp"
+                android:layout_height="19dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_search"
                 app:tint="?attr/accent" />

@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
@@ -21,9 +22,11 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -31,16 +34,22 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.doOnPreDraw
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.R as Media3R
-import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
+import coil.imageLoader
+import coil.request.Disposable
+import coil.request.ImageRequest
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.sparktube.app.R
 import com.sparktube.app.data.CommentsPage
 import com.sparktube.app.data.LocalStore
+import com.sparktube.app.data.SponsorSegment
+import com.sparktube.app.data.SubtitleCue
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.ActivityPlayerBinding
 import com.sparktube.app.download.DownloadCenter
@@ -49,6 +58,8 @@ import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.playback.StreamCatalog
 import com.sparktube.app.playback.effectiveHeight
 import com.sparktube.app.playback.toVideoEntry
+import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.ui.channel.ChannelActivity
 import com.sparktube.app.ui.common.CommentAdapter
 import com.sparktube.app.ui.common.VideoAdapter
@@ -56,8 +67,8 @@ import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
 import com.sparktube.app.ui.music.NowPlayingActivity
 import com.sparktube.app.util.AppPrefs
-import com.sparktube.app.util.Formatters
 import com.sparktube.app.util.Avatars
+import com.sparktube.app.util.Formatters
 import com.sparktube.app.util.PanelTransitions
 import com.sparktube.app.util.Themes
 import com.sparktube.app.util.Thumbs
@@ -66,30 +77,49 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * YouTube-style watch page with upper-left dual Audio/Video mini switcher buttons:
- * - Upper-left [Audio] button switches playback to Audio Player (NowPlayingActivity)
- * - Upper-left [Video] button resumes full video playback
+ * YouTube-style watch page with:
+ * - Upper-left dual Audio/Video mini switcher buttons
+ * - Screen Lock (`lockButton` & `unlockScreenButton`) blocking accidental touches, swipes, and back-presses
+ * - Auto-Translated Bangla Subtitles (`subtitleBanner`, `ccButton`, `&tlang=bn` + GTX fallback)
+ * - Live Offline Download Progress Bar (`downloadProgressContainer`, `downloadProgressBar`) with Tap-to-Pause/Resume/Retry
+ * - Fullscreen upper-right button opening a semi-transparent scrollable 2-column Video Card Grid
+ * - YouTube Ambient Cinema Glow (`ambientCinemaGlow`) sampled from video artwork
+ * - Double-Tap Ripple Seek (-10s / +10s) & Long-Press 2.0x Speed Hold (`gestureSeekPill`)
+ * - Automatic SponsorBlock segment skipping & ReturnYouTubeDislike counter
  */
 @OptIn(UnstableApi::class)
 class PlayerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityPlayerBinding
     private lateinit var relatedAdapter: VideoAdapter
+    private lateinit var fullscreenGridAdapter: FullscreenGridVideoAdapter
     private var channelSubCount: Long = -1L
 
     private lateinit var gestures: PlayerGestures
+    private var ambientGlowRequest: Disposable? = null
 
-    /** Mirrors the built-in controller's visibility (gear / seek controls). */
     private var controllerVisible = false
+    private var fullscreenGridOpen = false
+    private var isScreenLocked = false
 
-    // ----- Description (fold / unfold) -----
     private var descExpanded = false
     private var descBoundFor: String? = null
 
-    // ----- Comments -----
     private var commentsFor: String? = null
     private var commentsPage: CommentsPage? = null
     private var commentsJob: Job? = null
+
+    private var sponsorSegments: List<SponsorSegment> = emptyList()
+    private var lastSkippedSegmentStart: Long = -1L
+    private var sponsorJob: Job? = null
+    private var dislikeJob: Job? = null
+
+    // Bangla Auto-Translate & Original CC Subtitles state
+    private var subtitleCues: List<SubtitleCue> = emptyList()
+    private var subtitleJob: Job? = null
+    private var subtitlesLoadedForKey: String? = null
+    private var downloadResolveJob: Job? = null
+    private var awaitingLoginRetry: Boolean = false
 
     private val playbackListener = object : PlaybackCenter.Listener {
         override fun onItemChanged(entry: QueueEntry?) {
@@ -105,10 +135,14 @@ class PlayerActivity : AppCompatActivity() {
 
         override fun onCatalogReady() {
             bindCatalog()
+            updateDownloadUi()
         }
 
         override fun onError(message: String) {
+            binding.loading.isVisible = false
             binding.errorText.text = message
+            binding.retryButton.isVisible = true
+            binding.errorSignInButton.isVisible = !YouTubeAuth.isLoggedIn()
             binding.errorView.isVisible = true
         }
 
@@ -130,8 +164,17 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private var loadedUrl: String? = null
-
     private val downloadHandler = Handler(Looper.getMainLooper())
+    private val hidePillRunnable = Runnable {
+        binding.gestureSeekPill.animate().alpha(0f).setDuration(160).withEndAction {
+            binding.gestureSeekPill.isVisible = false
+        }.start()
+    }
+    private val hideUnlockBtnRunnable = Runnable {
+        binding.unlockScreenButton.animate().alpha(0f).setDuration(180).withEndAction {
+            binding.unlockScreenButton.isVisible = false
+        }.start()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Themes.apply(this)
@@ -154,12 +197,29 @@ class PlayerActivity : AppCompatActivity() {
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isScreenLocked) {
+                    revealUnlockPillTemporarily()
+                    Toast.makeText(this@PlayerActivity, R.string.screen_locked_toast, Toast.LENGTH_SHORT).show()
+                } else if (fullscreenGridOpen) {
+                    toggleFullscreenGrid(false)
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
         binding.fullscreenButton.isVisible = false
+        binding.lockButton.isVisible = false
+        binding.ccButton.isVisible = false
         binding.scaleButton.isVisible = false
+        binding.fullscreenVideosGridBtn.isVisible = false
         binding.playerView.setControllerVisibilityListener(
             object : PlayerView.ControllerVisibilityListener {
                 override fun onVisibilityChanged(visibility: Int) {
-                    controllerVisible = visibility == View.VISIBLE
+                    controllerVisible = !isScreenLocked && (visibility == View.VISIBLE)
                     syncFullscreenButtonVisibility()
                 }
             }
@@ -186,7 +246,27 @@ class PlayerActivity : AppCompatActivity() {
         }
         updateModeSwitcherUi()
 
-        binding.actionRow.isVisible = false
+        // Screen Lock & Unlock handlers
+        binding.lockButton.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            setScreenLocked(true)
+        }
+        binding.unlockScreenButton.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            setScreenLocked(false)
+        }
+
+        // Subtitles / CC button (Bangla Auto-Translate)
+        binding.ccButton.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            showSubtitleModeSheet()
+        }
+        binding.actionSubtitles.setOnClickListener {
+            showSubtitleModeSheet()
+        }
+        updateSubtitleUiBadge()
+
+        binding.actionRow.isVisible = true
         binding.subscribeButton.isVisible = false
 
         binding.description.setLinkTextColor(Themes.accentColor(this))
@@ -194,19 +274,52 @@ class PlayerActivity : AppCompatActivity() {
         binding.descToggle.setOnClickListener { toggleDescription() }
         binding.commentsCard.setOnClickListener { openComments() }
 
-        relatedAdapter = VideoAdapter(onClick = { model ->
-            val entry = model.toQueueEntry()
-            PlaybackCenter.playVideo(entry)
-        })
+        relatedAdapter = VideoAdapter(
+            onClick = { model ->
+                val entry = model.toQueueEntry()
+                PlaybackCenter.playVideo(entry)
+            },
+            onAudioClick = { model ->
+                val entry = model.toQueueEntry(isMusic = true)
+                PlaybackCenter.playMusic(entry, radio = true)
+                NowPlayingActivity.start(this)
+                finish()
+            }
+        )
         binding.relatedList.layoutManager = LinearLayoutManager(this)
         binding.relatedList.adapter = relatedAdapter
 
+        fullscreenGridAdapter = FullscreenGridVideoAdapter { model ->
+            toggleFullscreenGrid(false)
+            PlaybackCenter.playVideo(model.toQueueEntry())
+        }
+        binding.fullscreenGridRecycler.layoutManager = GridLayoutManager(this, 2)
+        binding.fullscreenGridRecycler.adapter = fullscreenGridAdapter
+
+        binding.fullscreenVideosGridBtn.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            toggleFullscreenGrid(!fullscreenGridOpen)
+        }
+        binding.closeFullscreenGridBtn.setOnClickListener {
+            toggleFullscreenGrid(false)
+        }
+
         binding.retryButton.setOnClickListener { retry() }
+        binding.errorSignInButton.setOnClickListener {
+            awaitingLoginRetry = true
+            YouTubeLoginActivity.start(this)
+        }
 
         binding.actionFavorite.setOnClickListener { toggleFavorite() }
         binding.actionPlaylist.setOnClickListener { showPlaylistSheet() }
         binding.actionShare.setOnClickListener { shareVideo() }
         binding.actionDownload.setOnClickListener { onDownloadClicked() }
+        binding.downloadProgressContainer.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            val entry = PlaybackCenter.currentEntry ?: return@setOnClickListener
+            DownloadCenter.togglePauseResumeOrRetry(this, entry.url)
+            updateDownloadUi()
+        }
         binding.actionBackground.setOnClickListener {
             PlaybackCenter.switchToAudioPlayerMode()
             Toast.makeText(this, R.string.switched_to_audio_player, Toast.LENGTH_SHORT).show()
@@ -232,9 +345,30 @@ class PlayerActivity : AppCompatActivity() {
             isLandscape = {
                 resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
             },
-            onMinimize = { finish() }
+            isLocked = { isScreenLocked },
+            onLockedTap = { revealUnlockPillTemporarily() },
+            onMinimize = { finish() },
+            onDoubleTapSeek = { forward ->
+                showGestureSeekPill(if (forward) "⏩ +10s" else "⏪ -10s", autoHide = true)
+            },
+            onSpeedHoldChanged = { holding2x ->
+                if (holding2x) {
+                    showGestureSeekPill("⏩ 2.0x Speed", autoHide = false)
+                } else {
+                    downloadHandler.post(hidePillRunnable)
+                }
+            }
         )
-        binding.playerView.setOnTouchListener { v, event -> gestures.onTouch(v, event) }
+        binding.playerView.setOnTouchListener { v, event ->
+            if (isScreenLocked) {
+                gestures.onTouch(v, event)
+            } else if (fullscreenGridOpen) {
+                toggleFullscreenGrid(false)
+                true
+            } else {
+                gestures.onTouch(v, event)
+            }
+        }
         binding.playerView.controllerShowTimeoutMs = 3500
 
         hookGearMenu()
@@ -274,6 +408,88 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    private fun setScreenLocked(locked: Boolean) {
+        isScreenLocked = locked
+        if (locked) {
+            toggleFullscreenGrid(false)
+            binding.playerView.hideController()
+            binding.playerView.useController = false
+            controllerVisible = false
+            syncFullscreenButtonVisibility()
+            revealUnlockPillTemporarily()
+            Toast.makeText(this, R.string.screen_locked_toast, Toast.LENGTH_SHORT).show()
+        } else {
+            downloadHandler.removeCallbacks(hideUnlockBtnRunnable)
+            binding.unlockScreenButton.isVisible = false
+            binding.playerView.useController = true
+            binding.playerView.showController()
+            controllerVisible = true
+            syncFullscreenButtonVisibility()
+            Toast.makeText(this, R.string.screen_unlocked_toast, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun revealUnlockPillTemporarily() {
+        downloadHandler.removeCallbacks(hideUnlockBtnRunnable)
+        binding.unlockScreenButton.alpha = 1f
+        binding.unlockScreenButton.isVisible = true
+        binding.unlockScreenButton.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        downloadHandler.postDelayed(hideUnlockBtnRunnable, 3000L)
+    }
+
+    private fun showGestureSeekPill(text: String, autoHide: Boolean) {
+        downloadHandler.removeCallbacks(hidePillRunnable)
+        binding.gestureSeekPill.text = text
+        binding.gestureSeekPill.alpha = 1f
+        binding.gestureSeekPill.isVisible = true
+        if (autoHide) {
+            downloadHandler.postDelayed(hidePillRunnable, 750L)
+        }
+    }
+
+    private fun applyAmbientCinemaGlow(thumbUrl: String) {
+        ambientGlowRequest?.dispose()
+        if (thumbUrl.isBlank()) return
+        val req = ImageRequest.Builder(this)
+            .data(thumbUrl)
+            .size(48, 48)
+            .allowHardware(false)
+            .target { drawable ->
+                val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return@target
+                if (isFinishing || isDestroyed) return@target
+                var r = 0L; var g = 0L; var b = 0L; var n = 0L
+                val step = maxOf(1, bmp.width / 8)
+                var y = 0
+                while (y < bmp.height) {
+                    var x = 0
+                    while (x < bmp.width) {
+                        val c = bmp.getPixel(x, y)
+                        r += Color.red(c); g += Color.green(c); b += Color.blue(c); n++
+                        x += step
+                    }
+                    y += step
+                }
+                val avg = if (n > 0) Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt()) else 0xFFFF0033.toInt()
+                val glowTop = ColorUtils.setAlphaComponent(avg, 145)
+                val glowMid = ColorUtils.setAlphaComponent(avg, 65)
+                binding.ambientCinemaGlow.background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(glowTop, glowMid, Color.TRANSPARENT)
+                )
+            }
+            .build()
+        ambientGlowRequest = imageLoader.enqueue(req)
+    }
+
+    private fun toggleFullscreenGrid(open: Boolean) {
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        fullscreenGridOpen = open && landscape && !isScreenLocked
+        binding.fullscreenGridOverlay.isVisible = fullscreenGridOpen
+        if (fullscreenGridOpen) {
+            binding.playerView.hideController()
+        }
+    }
+
     private fun updateModeSwitcherUi() {
         val isAudio = PlaybackCenter.audioOnlyMode || PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO
         binding.miniMusicBtn.setBackgroundResource(
@@ -293,13 +509,15 @@ class PlayerActivity : AppCompatActivity() {
         gear?.setOnClickListener { showVideoSettingsSheet() }
     }
 
-    /** Fullscreen + scale buttons follow the built-in controller's visibility; top-left switcher stays accessible in portrait and follows controller in fullscreen. */
     private fun syncFullscreenButtonVisibility() {
-        val visible = !isInPictureInPictureMode && controllerVisible
+        val visible = !isInPictureInPictureMode && controllerVisible && !isScreenLocked
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         binding.fullscreenButton.isVisible = visible
+        binding.lockButton.isVisible = visible
+        binding.ccButton.isVisible = visible
         binding.scaleButton.isVisible = visible && landscape
-        binding.topLeftModeSwitcher.isVisible = !isInPictureInPictureMode && (!landscape || controllerVisible)
+        binding.fullscreenVideosGridBtn.isVisible = visible && landscape
+        binding.topLeftModeSwitcher.isVisible = !isInPictureInPictureMode && !isScreenLocked && (!landscape || controllerVisible)
     }
 
     private var lastTopInset = 0
@@ -332,7 +550,19 @@ class PlayerActivity : AppCompatActivity() {
                 topMargin = bars.top + dp(4)
                 marginEnd = endInset
             }
+            binding.lockButton.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                topMargin = bars.top + dp(4)
+                marginEnd = endInset
+            }
+            binding.ccButton.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                topMargin = bars.top + dp(4)
+                marginEnd = endInset
+            }
             binding.scaleButton.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                topMargin = bars.top + dp(4)
+                marginEnd = endInset
+            }
+            binding.fullscreenVideosGridBtn.updateLayoutParams<ConstraintLayout.LayoutParams> {
                 topMargin = bars.top + dp(4)
                 marginEnd = endInset
             }
@@ -415,6 +645,12 @@ class PlayerActivity : AppCompatActivity() {
             PlaybackCenter.attachView(binding.playerView)
         }
         updateModeSwitcherUi()
+        updateSubtitleUiBadge()
+        updateDownloadUi()
+        if (awaitingLoginRetry && YouTubeAuth.isLoggedIn()) {
+            awaitingLoginRetry = false
+            retry()
+        }
     }
 
     private fun applyCloseTransition() {
@@ -444,6 +680,7 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         downloadHandler.removeCallbacks(downloadPoll)
+        downloadHandler.removeCallbacks(hideUnlockBtnRunnable)
         PlaybackCenter.removeListener(playbackListener)
         if (requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -451,6 +688,10 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        downloadResolveJob?.cancel()
+        ambientGlowRequest?.dispose()
+        ambientGlowRequest = null
+        subtitleJob?.cancel()
         if (::gestures.isInitialized) gestures.release()
         super.onDestroy()
     }
@@ -494,7 +735,13 @@ class PlayerActivity : AppCompatActivity() {
             binding.topLeftModeSwitcher.isVisible = false
             binding.backButton.isVisible = false
             binding.fullscreenButton.isVisible = false
+            binding.lockButton.isVisible = false
+            binding.ccButton.isVisible = false
             binding.scaleButton.isVisible = false
+            binding.fullscreenVideosGridBtn.isVisible = false
+            binding.fullscreenGridOverlay.isVisible = false
+            binding.unlockScreenButton.isVisible = false
+            binding.ambientCinemaGlow.isVisible = false
             binding.scrollArea.isVisible = false
             binding.loading.isVisible = false
             binding.errorView.isVisible = false
@@ -504,6 +751,7 @@ class PlayerActivity : AppCompatActivity() {
             }
             applyPlayerTopInset()
         } else {
+            binding.ambientCinemaGlow.isVisible = true
             binding.scrollArea.isVisible = true
             binding.playerView.updateLayoutParams<ConstraintLayout.LayoutParams> {
                 height = 0
@@ -525,6 +773,7 @@ class PlayerActivity : AppCompatActivity() {
             if (landscape) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen
         )
         applyImmersive(landscape)
+        binding.ambientCinemaGlow.isVisible = !landscape
         if (landscape) {
             binding.scrollArea.isVisible = false
             binding.playerView.updateLayoutParams<ConstraintLayout.LayoutParams> {
@@ -532,6 +781,7 @@ class PlayerActivity : AppCompatActivity() {
                 dimensionRatio = null
             }
         } else {
+            toggleFullscreenGrid(false)
             binding.scrollArea.isVisible = true
             binding.playerView.updateLayoutParams<ConstraintLayout.LayoutParams> {
                 height = 0
@@ -561,7 +811,13 @@ class PlayerActivity : AppCompatActivity() {
         binding.channelName.text = entry.uploader
         binding.channelSubs.text = ""
         binding.channelAvatar.setImageResource(0)
+        binding.subtitleBanner.isVisible = false
+        subtitleCues = emptyList()
+        subtitlesLoadedForKey = null
+        applyAmbientCinemaGlow(entry.thumbnailUrl)
+        Avatars.load(binding.channelAvatar, "", entry.uploader)
         loadChannelInfo()
+        loadSponsorAndDislikes(entry.url)
 
         updateFavoriteUi()
         updateDownloadUi()
@@ -570,27 +826,144 @@ class PlayerActivity : AppCompatActivity() {
         bindCatalog()
     }
 
+    private fun loadSponsorAndDislikes(url: String) {
+        sponsorSegments = emptyList()
+        lastSkippedSegmentStart = -1L
+        sponsorJob?.cancel()
+        dislikeJob?.cancel()
+        if (url.startsWith("file://")) return
+
+        sponsorJob = lifecycleScope.launch {
+            if (AppPrefs.sponsorBlock) {
+                sponsorSegments = YtRepository.fetchSponsorSegments(url)
+            }
+        }
+        dislikeJob = lifecycleScope.launch {
+            val dislikes = YtRepository.fetchDislikeCount(url)
+            val likes = PlaybackCenter.catalogForCurrentEntry()?.likeCount ?: -1L
+            updateLikesDislikesLabel(likes, dislikes)
+        }
+    }
+
+    private fun updateLikesDislikesLabel(likes: Long, dislikes: Long) {
+        val likeText = if (likes >= 0) Formatters.formatViewCount(likes) else "Like"
+        val dislikeText = if (dislikes >= 0) " · 👎 ${Formatters.formatViewCount(dislikes)}" else ""
+        binding.actionLikesDislikesLabel.text = "$likeText$dislikeText"
+    }
+
     private fun bindCatalog() {
         val entry = PlaybackCenter.currentEntry ?: return
-        val catalog = PlaybackCenter.catalog
+        val catalog = PlaybackCenter.catalogForCurrentEntry()
 
-        binding.actionRow.isVisible = catalog != null
+        binding.actionRow.isVisible = true
 
         if (catalog != null) {
             binding.title.text = catalog.name.ifBlank { entry.title }
             bindDescription(catalog, entry.url)
             maybeLoadComments(entry.url)
+            maybeLoadSubtitles(catalog, entry.url)
             binding.channelName.text = catalog.uploaderName.ifBlank { entry.uploader }
             if (catalog.uploaderAvatarUrl.isNotBlank()) {
                 Thumbs.load(binding.channelAvatar, catalog.uploaderAvatarUrl)
             }
-            relatedAdapter.submitList(catalog.related.map { it.toUiModel() })
+            val relatedModels = catalog.related.map { it.toUiModel() }
+            relatedAdapter.submitList(relatedModels)
+            fullscreenGridAdapter.submitList(relatedModels)
+            if (catalog.likeCount >= 0 && !binding.actionLikesDislikesLabel.text.contains("👎")) {
+                updateLikesDislikesLabel(catalog.likeCount, -1L)
+            }
         } else {
             binding.descCard.isVisible = false
+            binding.subtitleBanner.isVisible = false
             descBoundFor = null
             resetComments()
         }
         updateSubscribeUi()
+    }
+
+    private fun maybeLoadSubtitles(catalog: StreamCatalog, url: String, forceReload: Boolean = false) {
+        updateSubtitleUiBadge()
+        val mode = AppPrefs.subtitleMode
+        if (mode == AppPrefs.SUBTITLE_MODE_OFF || catalog.subtitles.isEmpty()) {
+            subtitleJob?.cancel()
+            subtitleCues = emptyList()
+            binding.subtitleBanner.isVisible = false
+            return
+        }
+        val key = "$url|$mode"
+        if (!forceReload && subtitlesLoadedForKey == key && subtitleCues.isNotEmpty()) return
+        subtitlesLoadedForKey = key
+        subtitleJob?.cancel()
+        subtitleJob = lifecycleScope.launch {
+            val cues = YtRepository.fetchSubtitles(catalog.subtitles, mode)
+            if (subtitlesLoadedForKey != key) return@launch
+            subtitleCues = cues
+            updateActiveSubtitleCue()
+        }
+    }
+
+    private fun updateActiveSubtitleCue() {
+        if (AppPrefs.subtitleMode == AppPrefs.SUBTITLE_MODE_OFF || subtitleCues.isEmpty()) {
+            binding.subtitleBanner.isVisible = false
+            return
+        }
+        val pos = PlaybackCenter.positionMs
+        val cue = subtitleCues.firstOrNull { pos >= it.startMs && pos <= it.endMs }
+        if (cue != null && cue.text.isNotBlank()) {
+            binding.subtitleBanner.text = cue.text
+            binding.subtitleBanner.isVisible = true
+        } else {
+            binding.subtitleBanner.isVisible = false
+        }
+    }
+
+    private fun updateSubtitleUiBadge() {
+        val mode = AppPrefs.subtitleMode
+        val active = mode != AppPrefs.SUBTITLE_MODE_OFF
+        val accent = Themes.accentColor(this)
+        binding.ccButton.setColorFilter(if (active) accent else Color.WHITE)
+        binding.actionSubtitlesIcon.setColorFilter(if (active) accent else getColor(R.color.on_surface))
+        binding.actionSubtitlesLabel.text = subtitleModeSummary()
+    }
+
+    private fun subtitleModeSummary(): String = when (AppPrefs.subtitleMode) {
+        AppPrefs.SUBTITLE_MODE_BANGLA -> getString(R.string.subtitles_bangla_auto)
+        AppPrefs.SUBTITLE_MODE_ORIGINAL -> getString(R.string.subtitles_original)
+        else -> getString(R.string.subtitles_off)
+    }
+
+    private fun showSubtitleModeSheet() {
+        val catalog = PlaybackCenter.catalogForCurrentEntry()
+        val sheet = BottomSheetDialog(this)
+        val root = sheetRoot()
+        root.addView(sheetTitle(getString(R.string.subtitles_section)))
+
+        val hasCaptions = catalog?.subtitles?.isNotEmpty() == true
+        if (!hasCaptions) {
+            root.addView(hintRow(getString(R.string.subtitles_unavailable)))
+        }
+
+        val current = AppPrefs.subtitleMode
+        val options = listOf(
+            AppPrefs.SUBTITLE_MODE_BANGLA to getString(R.string.subtitles_bangla_auto),
+            AppPrefs.SUBTITLE_MODE_ORIGINAL to getString(R.string.subtitles_original),
+            AppPrefs.SUBTITLE_MODE_OFF to getString(R.string.subtitles_off)
+        )
+        options.forEach { (mode, label) ->
+            root.addView(
+                sheetRow(label, current == mode) {
+                    AppPrefs.subtitleMode = mode
+                    updateSubtitleUiBadge()
+                    val entry = PlaybackCenter.currentEntry
+                    if (catalog != null && entry != null) {
+                        maybeLoadSubtitles(catalog, entry.url, forceReload = true)
+                    }
+                    Toast.makeText(this, "${getString(R.string.subtitles_section)}: $label", Toast.LENGTH_SHORT).show()
+                    sheet.dismiss()
+                }
+            )
+        }
+        showSheet(sheet, root, peekDp = 320)
     }
 
     private fun bindDescription(catalog: StreamCatalog, url: String) {
@@ -726,6 +1099,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun openComments() {
         val url = PlaybackCenter.currentEntry?.url ?: return
+        if (url.startsWith("file://")) return
         CommentsSheet(
             context = this,
             scope = lifecycleScope,
@@ -741,7 +1115,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun loadChannelInfo() {
-        val uploaderUrl = PlaybackCenter.catalog?.uploaderUrl ?: return
+        val uploaderUrl = PlaybackCenter.catalogForCurrentEntry()?.uploaderUrl ?: return
         lifecycleScope.launch {
             try {
                 val channel = YtRepository.channelInfo(uploaderUrl)
@@ -773,8 +1147,14 @@ class PlayerActivity : AppCompatActivity() {
             DownloadCenter.isDownloaded(this, entry.url) -> {
                 confirmDeleteDownload()
             }
-            DownloadCenter.hasActiveDownload(this, entry.url) -> {
-                Toast.makeText(this, R.string.download_status_running, Toast.LENGTH_SHORT).show()
+            DownloadCenter.hasActiveDownload(this, entry.url) ||
+                DownloadCenter.hasPausedDownload(this, entry.url) ||
+                DownloadCenter.hasFailedDownload(this, entry.url) -> {
+                DownloadCenter.togglePauseResumeOrRetry(this, entry.url)
+                updateDownloadUi()
+            }
+            entry.url.startsWith("file://") -> {
+                Toast.makeText(this, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
             }
             else -> showDownloadSheet()
         }
@@ -898,21 +1278,58 @@ class PlayerActivity : AppCompatActivity() {
     private fun updateDownloadUi() {
         val entry = PlaybackCenter.currentEntry ?: return
         when {
-            DownloadCenter.isDownloaded(this, entry.url) -> {
+            DownloadCenter.hasActiveDownload(this, entry.url) -> {
+                val percent = DownloadCenter.downloadProgress(this, entry.url).coerceIn(0, 100)
+                val bytesText = DownloadCenter.downloadBytesText(this, entry.url)
+                val dlLabel = getString(R.string.downloading_fmt, percent)
+                binding.actionDownloadIcon.setImageResource(R.drawable.ic_pause)
+                binding.actionDownloadIcon.setColorFilter(Themes.accentColor(this))
+                binding.actionDownloadLabel.text = dlLabel
+
+                binding.downloadProgressContainer.isVisible = true
+                binding.downloadProgressLabel.text = "⏸ $dlLabel · Tap to Pause"
+                binding.downloadBytesLabel.text = bytesText
+                binding.downloadProgressBar.isIndeterminate = percent == 0 && bytesText.isBlank()
+                binding.downloadProgressBar.progress = percent
+                binding.downloadProgressBar.alpha = 1.0f
+            }
+            DownloadCenter.hasPausedDownload(this, entry.url) -> {
+                val percent = DownloadCenter.downloadProgress(this, entry.url).coerceIn(0, 100)
+                val bytesText = DownloadCenter.downloadBytesText(this, entry.url)
+                val pausedLabel = getString(R.string.paused_fmt, percent)
+                binding.actionDownloadIcon.setImageResource(R.drawable.ic_play_arrow)
+                binding.actionDownloadIcon.setColorFilter(getColor(R.color.music_green))
+                binding.actionDownloadLabel.text = pausedLabel
+
+                binding.downloadProgressContainer.isVisible = true
+                binding.downloadProgressLabel.text = "▶ $pausedLabel · Tap to Resume"
+                binding.downloadBytesLabel.text = bytesText
+                binding.downloadProgressBar.isIndeterminate = false
+                binding.downloadProgressBar.progress = percent
+                binding.downloadProgressBar.alpha = 0.6f
+            }
+            DownloadCenter.hasFailedDownload(this, entry.url) -> {
+                binding.actionDownloadIcon.setImageResource(R.drawable.ic_player_replay)
+                binding.actionDownloadIcon.setColorFilter(Themes.accentColor(this))
+                binding.actionDownloadLabel.text = getString(R.string.retry)
+
+                binding.downloadProgressContainer.isVisible = true
+                binding.downloadProgressLabel.text = "↻ Download failed · Tap to Retry"
+                binding.downloadBytesLabel.text = ""
+                binding.downloadProgressBar.isIndeterminate = false
+                binding.downloadProgressBar.progress = 0
+            }
+            entry.url.startsWith("file://") || DownloadCenter.isDownloaded(this, entry.url) -> {
                 binding.actionDownloadIcon.setImageResource(R.drawable.ic_check)
                 binding.actionDownloadIcon.setColorFilter(getColor(R.color.music_green))
                 binding.actionDownloadLabel.text = getString(R.string.downloaded_label)
-            }
-            DownloadCenter.hasActiveDownload(this, entry.url) -> {
-                val percent = DownloadCenter.downloadProgress(this, entry.url)
-                binding.actionDownloadIcon.setImageResource(R.drawable.ic_download)
-                binding.actionDownloadIcon.setColorFilter(getColor(R.color.on_surface))
-                binding.actionDownloadLabel.text = getString(R.string.downloading_fmt, percent)
+                binding.downloadProgressContainer.isVisible = false
             }
             else -> {
                 binding.actionDownloadIcon.setImageResource(R.drawable.ic_download)
                 binding.actionDownloadIcon.setColorFilter(getColor(R.color.on_surface))
                 binding.actionDownloadLabel.text = getString(R.string.action_download)
+                binding.downloadProgressContainer.isVisible = false
             }
         }
     }
@@ -925,9 +1342,25 @@ class PlayerActivity : AppCompatActivity() {
                     DownloadCenter.refreshStatuses(this@PlayerActivity)
                 }
                 updateDownloadUi()
+                checkSponsorBlockSkip()
+                updateActiveSubtitleCue()
             }
-            downloadHandler.postDelayed(this, 1000)
+            downloadHandler.postDelayed(this, 300)
         }
+    }
+
+    private fun checkSponsorBlockSkip() {
+        if (!AppPrefs.sponsorBlock || !PlaybackCenter.isPlaying || sponsorSegments.isEmpty()) return
+        val pos = PlaybackCenter.positionMs
+        val hit = sponsorSegments.firstOrNull { pos >= it.startMs && pos < it.endMs - 400L } ?: return
+        if (hit.startMs == lastSkippedSegmentStart) return
+        lastSkippedSegmentStart = hit.startMs
+        PlaybackCenter.seekTo(hit.endMs)
+        Toast.makeText(
+            this,
+            "SponsorBlock: Skipped ${hit.category}",
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     private fun toggleFavorite() {
@@ -941,28 +1374,35 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun shareVideo() {
         val entry = PlaybackCenter.currentEntry ?: return
+        val shareUrl = if (entry.url.startsWith("file://")) {
+            DownloadCenter.recordsFor(this, entry.url).firstOrNull()?.sourceUrl?.takeIf { it.startsWith("http") }
+                ?: "https://www.youtube.com/watch?v=${DownloadCenter.videoIdOf(entry.url)}"
+        } else {
+            entry.url
+        }
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, entry.url)
+            putExtra(Intent.EXTRA_TEXT, shareUrl)
         }
         startActivity(Intent.createChooser(intent, getString(R.string.share_via)))
     }
 
     private fun openChannel() {
         val entry = PlaybackCenter.currentEntry ?: return
-        val channelUrl = PlaybackCenter.catalog?.uploaderUrl ?: return
+        val channelUrl = PlaybackCenter.catalogForCurrentEntry()?.uploaderUrl ?: return
         if (channelUrl.isBlank()) return
         ChannelActivity.start(this, channelUrl, entry.uploader)
     }
 
     private fun toggleSubscribe() {
         val entry = PlaybackCenter.currentEntry ?: return
-        val channelUrl = PlaybackCenter.catalog?.uploaderUrl ?: return
+        val catalog = PlaybackCenter.catalogForCurrentEntry() ?: return
+        val channelUrl = catalog.uploaderUrl
         if (channelUrl.isBlank()) return
         val channelEntry = com.sparktube.app.data.ChannelEntry(
             url = channelUrl,
-            name = PlaybackCenter.catalog?.uploaderName ?: entry.uploader,
-            avatarUrl = PlaybackCenter.catalog?.uploaderAvatarUrl.orEmpty(),
+            name = catalog.uploaderName.ifBlank { entry.uploader },
+            avatarUrl = catalog.uploaderAvatarUrl,
             subscriberCount = channelSubCount
         )
         val nowSubscribed = LocalStore.toggleSubscription(this, channelEntry)
@@ -975,7 +1415,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun updateSubscribeUi() {
-        val channelUrl = PlaybackCenter.catalog?.uploaderUrl
+        val channelUrl = PlaybackCenter.catalogForCurrentEntry()?.uploaderUrl
         if (channelUrl.isNullOrBlank()) {
             binding.subscribeButton.isVisible = false
             return
@@ -993,13 +1433,9 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun retry() {
         binding.errorView.isVisible = false
-        val entry = PlaybackCenter.currentEntry
-        if (entry != null) {
-            PlaybackCenter.playVideo(entry)
-        }
+        binding.loading.isVisible = true
+        PlaybackCenter.retryCurrent()
     }
-
-    // ----- Bottom sheets -----
 
     private fun sheetRoot(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1037,10 +1473,7 @@ class PlayerActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Themes.elevatedColor(this@PlayerActivity))
-            }
+            setBackgroundResource(R.drawable.bg_card_soft)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).also { it.topMargin = dp(10) }
@@ -1087,7 +1520,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showVideoSettingsSheet() {
-        val catalog = PlaybackCenter.catalog
+        val catalog = PlaybackCenter.catalogForCurrentEntry()
 
         val sheet = BottomSheetDialog(this)
         val root = sheetRoot()
@@ -1102,9 +1535,45 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
         root.addView(
+            sheetMenuRow(getString(R.string.subtitles_section), subtitleModeSummary()) {
+                sheet.dismiss()
+                showSubtitleModeSheet()
+            }
+        )
+        root.addView(
             sheetMenuRow(getString(R.string.settings_speed_section), speedSummary()) {
                 sheet.dismiss()
                 showSpeedSheet()
+            }
+        )
+        root.addView(
+            sheetMenuRow(getString(R.string.action_screen_lock), getString(R.string.off)) {
+                sheet.dismiss()
+                setScreenLocked(true)
+            }
+        )
+        root.addView(
+            sheetMenuRow(
+                getString(R.string.youtube_account_title),
+                YouTubeAuth.accountSummary()
+            ) {
+                sheet.dismiss()
+                awaitingLoginRetry = true
+                YouTubeLoginActivity.start(this)
+            }
+        )
+        root.addView(
+            sheetMenuRow(
+                "SponsorBlock Auto-Skip",
+                if (AppPrefs.sponsorBlock) getString(R.string.on) else getString(R.string.off)
+            ) {
+                AppPrefs.sponsorBlock = !AppPrefs.sponsorBlock
+                sheet.dismiss()
+                Toast.makeText(
+                    this,
+                    if (AppPrefs.sponsorBlock) "SponsorBlock enabled" else "SponsorBlock disabled",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         )
         if (catalog != null && catalog.audioTracks.size > 1) {
@@ -1116,7 +1585,7 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
 
-        showSheet(sheet, root, peekDp = 320)
+        showSheet(sheet, root, peekDp = 420)
     }
 
     private fun qualitySummary(catalog: StreamCatalog): String {
@@ -1148,7 +1617,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showQualitySheet() {
-        val catalog = PlaybackCenter.catalog ?: return
+        val catalog = PlaybackCenter.catalogForCurrentEntry() ?: return
         val sheet = BottomSheetDialog(this)
         val root = sheetRoot()
         root.addView(sheetTitle(getString(R.string.settings_quality_section)))
@@ -1199,7 +1668,7 @@ class PlayerActivity : AppCompatActivity() {
                     s == currentSpeed
                 ) {
                     PlaybackCenter.setSpeed(s)
-                    PlaybackCenter.catalog?.let {
+                    PlaybackCenter.catalogForCurrentEntry()?.let {
                         binding.qualityBadgeInfo.text = "${qualitySummary(it)} · ${speedSummary()}"
                     }
                     sheet.dismiss()
@@ -1210,7 +1679,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showAudioTrackSheet() {
-        val catalog = PlaybackCenter.catalog ?: return
+        val catalog = PlaybackCenter.catalogForCurrentEntry() ?: return
         val sheet = BottomSheetDialog(this)
         val root = sheetRoot()
         root.addView(sheetTitle(getString(R.string.settings_audio_track_section)))
@@ -1239,11 +1708,33 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun showDownloadSheet() {
         val entry = PlaybackCenter.currentEntry ?: return
-        val catalog = PlaybackCenter.catalog ?: run {
-            Toast.makeText(this, R.string.error_no_streams, Toast.LENGTH_SHORT).show()
+        val verifiedCatalog = PlaybackCenter.catalogForCurrentEntry()
+        if (verifiedCatalog != null) {
+            DownloadSheet(this, entry, verifiedCatalog) {
+                updateDownloadUi()
+            }.show()
             return
         }
-        DownloadSheet(this, entry, catalog).show()
+        if (entry.url.startsWith("file://")) {
+            Toast.makeText(this, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
+            return
+        }
+        downloadResolveJob?.cancel()
+        binding.loading.isVisible = true
+        downloadResolveJob = lifecycleScope.launch {
+            try {
+                val info = YtRepository.streamInfo(entry.url)
+                if (PlaybackCenter.currentEntry?.url != entry.url) return@launch
+                val freshCatalog = StreamCatalog(info, entry.url)
+                DownloadSheet(this@PlayerActivity, entry, freshCatalog) {
+                    updateDownloadUi()
+                }.show()
+            } catch (_: Exception) {
+                Toast.makeText(this@PlayerActivity, R.string.error_no_streams, Toast.LENGTH_SHORT).show()
+            } finally {
+                binding.loading.isVisible = PlaybackCenter.isResolving
+            }
+        }
     }
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(
@@ -1270,7 +1761,6 @@ class PlayerActivity : AppCompatActivity() {
             context.startActivity(intent)
         }
 
-        /** Re-opens the page for whatever is already playing in the mini player. */
         fun startResume(context: Context) {
             val intent = Intent(context, PlayerActivity::class.java).apply {
                 putExtra(EXTRA_ATTACH, true)

@@ -6,6 +6,8 @@ import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -13,18 +15,18 @@ import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import com.sparktube.app.R
+import com.sparktube.app.playback.PlaybackCenter
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
  * Touch gestures on the video surface:
- *  - vertical swipe on the LEFT  -> screen brightness
- *  - vertical swipe on the RIGHT -> media volume
- *  - portrait only: swipe down in the middle -> minimize to the mini player
- *
- * Landscape (fullscreen) uses the whole surface for brightness/volume. In portrait only the
- * outer thirds do, so the swipe-down-to-minimize gesture keeps working where people expect it.
- * A plain tap is never consumed, so the controller still toggles normally.
+ *  - Screen Lock guard: when `isLocked()` is true, blocks all swipes/double-taps/speed-holds and triggers `onLockedTap`
+ *  - Vertical swipe on LEFT  -> screen brightness
+ *  - Vertical swipe on RIGHT -> media volume
+ *  - Portrait middle swipe down -> minimize to mini player
+ *  - Double-tap LEFT / RIGHT -> ripple seek -10s / +10s (using exact touched PlayerView width)
+ *  - Long-press anywhere -> temporary 2.0x speed while finger is held down
  */
 class PlayerGestures(
     private val activity: Activity,
@@ -33,9 +35,13 @@ class PlayerGestures(
     private val hudBar: ProgressBar,
     private val hudText: TextView,
     private val isLandscape: () -> Boolean,
-    private val onMinimize: () -> Unit
+    private val isLocked: () -> Boolean = { false },
+    private val onLockedTap: (() -> Unit)? = null,
+    private val onMinimize: () -> Unit,
+    private val onDoubleTapSeek: ((forward: Boolean) -> Unit)? = null,
+    private val onSpeedHoldChanged: ((holding2x: Boolean) -> Unit)? = null
 ) {
-    private enum class Mode { NONE, BRIGHTNESS, VOLUME, MINIMIZE, IGNORE }
+    private enum class Mode { NONE, BRIGHTNESS, VOLUME, MINIMIZE, SPEED_HOLD, IGNORE }
 
     private val audio = activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val slop = ViewConfiguration.get(activity).scaledTouchSlop
@@ -45,16 +51,59 @@ class PlayerGestures(
     private var mode = Mode.IGNORE
     private var downX = 0f
     private var downY = 0f
+    private var lastViewWidth = 0
     private var startBrightness = 0.5f
     private var startVolume = 0f
     private var minimized = false
+    private var savedSpeedBeforeHold = 1.0f
 
     private val hideRunnable = Runnable {
         hud.animate().alpha(0f).setDuration(180).withEndAction { hud.visibility = View.GONE }.start()
     }
 
-    /** Set as the PlayerView's OnTouchListener. Returns true only while a gesture owns the touch. */
+    private val gestureDetector = GestureDetector(
+        activity,
+        object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (isLocked()) return true
+                val w = lastViewWidth.takeIf { it > 0 }
+                    ?: activity.window.decorView.width.takeIf { it > 0 }
+                    ?: 1000
+                val forward = e.x >= w * 0.5f
+                if (forward) {
+                    PlaybackCenter.seekTo(PlaybackCenter.positionMs + 10_000L)
+                } else {
+                    PlaybackCenter.seekTo((PlaybackCenter.positionMs - 10_000L).coerceAtLeast(0L))
+                }
+                hud.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                onDoubleTapSeek?.invoke(forward)
+                return true
+            }
+
+            override fun onLongPress(e: MotionEvent) {
+                if (isLocked()) return
+                if (mode == Mode.NONE && PlaybackCenter.isPlaying) {
+                    mode = Mode.SPEED_HOLD
+                    savedSpeedBeforeHold = PlaybackCenter.playbackSpeed
+                    PlaybackCenter.setSpeed(2.0f)
+                    hud.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    onSpeedHoldChanged?.invoke(true)
+                }
+            }
+        }
+    )
+
     fun onTouch(v: View, e: MotionEvent): Boolean {
+        lastViewWidth = v.width
+        if (isLocked()) {
+            if (e.actionMasked == MotionEvent.ACTION_UP) {
+                onLockedTap?.invoke()
+            }
+            return true
+        }
+
+        gestureDetector.onTouchEvent(e)
+
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x
@@ -68,6 +117,7 @@ class PlayerGestures(
             }
 
             MotionEvent.ACTION_MOVE -> {
+                if (mode == Mode.SPEED_HOLD) return true
                 val dy = e.y - downY
                 val dx = abs(e.x - downX)
                 if (mode == Mode.NONE && abs(dy) > slop * 1.5f && abs(dy) > dx * 1.4f) {
@@ -75,11 +125,11 @@ class PlayerGestures(
                 }
                 when (mode) {
                     Mode.BRIGHTNESS -> {
-                        setBrightness(startBrightness - dy / (v.height * 0.75f))
+                        setBrightness(startBrightness - dy / (v.height.coerceAtLeast(1) * 0.75f))
                         return true
                     }
                     Mode.VOLUME -> {
-                        setVolume(startVolume - dy / (v.height * 0.75f))
+                        setVolume(startVolume - dy / (v.height.coerceAtLeast(1) * 0.75f))
                         return true
                     }
                     Mode.MINIMIZE -> {
@@ -94,6 +144,12 @@ class PlayerGestures(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (mode == Mode.SPEED_HOLD) {
+                    PlaybackCenter.setSpeed(savedSpeedBeforeHold)
+                    onSpeedHoldChanged?.invoke(false)
+                    mode = Mode.IGNORE
+                    return true
+                }
                 val owned = mode == Mode.BRIGHTNESS || mode == Mode.VOLUME || mode == Mode.MINIMIZE
                 if (mode == Mode.BRIGHTNESS || mode == Mode.VOLUME) {
                     handler.removeCallbacks(hideRunnable)
@@ -145,7 +201,6 @@ class PlayerGestures(
             try {
                 audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
             } catch (_: SecurityException) {
-                // Do-Not-Disturb policy can refuse; keep the HUD honest by not updating it
                 return
             }
         }

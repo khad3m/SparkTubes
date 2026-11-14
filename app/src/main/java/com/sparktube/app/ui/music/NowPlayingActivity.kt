@@ -16,6 +16,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.SpannableStringBuilder
+import android.text.TextPaint
+import android.text.method.LinkMovementMethod
+import android.text.style.ClickableSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
@@ -37,30 +40,45 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.isVisible
+import androidx.lifecycle.lifecycleScope
 import coil.imageLoader
 import coil.request.Disposable
 import coil.request.ImageRequest
 import com.sparktube.app.R
 import com.sparktube.app.data.LocalStore
+import com.sparktube.app.data.LyricLine
+import com.sparktube.app.data.LyricsResult
+import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.ActivityNowPlayingBinding
 import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.playback.QueueEntry
+import com.sparktube.app.playback.StreamCatalog
+import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.ui.player.DownloadSheet
 import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.PanelTransitions
 import com.sparktube.app.util.Themes
 import com.sparktube.app.util.Thumbs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.sin
 
 /**
- * Apple Music Full-Screen Now Playing Sheet with Upper-Left Dual Audio/Video Switcher:
- * - Upper-left [Audio] and [Video] mini buttons: tapping [Video] switches seamlessly to PlayerActivity
- * - Dynamic artwork-sampled ambient gradient backdrop
- * - Spring-animated floating album artwork (1.0f playing, 0.80f paused)
- * - Interactive drag-down-to-dismiss that follows the finger
+ * Apple Music Full-Screen Now Playing Sheet with:
+ * - Upper-left [Audio] and [Video] mini switcher buttons
+ * - Live Beat-Reactive Audio Spectrum Visualizer (`AudioVisualizerView`)
+ * - Interactive Tap-to-Seek Synced Lyrics (tap any line to jump to that timestamp) + Offline `.lrc` Cache
+ * - Luminous Progress Scrubber with breathing glow & drag scale effect
+ * - Real-time Offline Download Progress Bar (`downloadProgressCard` & `downloadProgressBar`) with Tap-to-Pause/Resume/Retry
+ * - Smooth Audio Crossfade (`Off / 2s / 4s / 6s / 8s`), Sleep Timer & Hardware Audio Equalizer / Bass Boost sheet
  */
 class NowPlayingActivity : AppCompatActivity() {
 
@@ -71,10 +89,17 @@ class NowPlayingActivity : AppCompatActivity() {
     private var userSeeking = false
     private var volumeDragging = false
     private var lyricsVisible = false
-    private var boundUrl: String? = null
+    private var boundArtKey: String? = null
     private var backdropRequest: Disposable? = null
     private var lastSlowTick = 0L
     private var skipCloseAnim = false
+
+    // Real-Time Synced Lyrics state
+    private var lyricsJob: Job? = null
+    private var lyricsForUrl: String? = null
+    private var currentLyrics: LyricsResult? = null
+    private var lastHighlightedLyricIdx = -2
+    private var downloadResolveJob: Job? = null
 
     private val playbackListener = object : PlaybackCenter.Listener {
         override fun onItemChanged(entry: QueueEntry?) = bind()
@@ -82,8 +107,18 @@ class NowPlayingActivity : AppCompatActivity() {
         override fun onResolvingChanged(isResolving: Boolean) {
             binding.loading.isVisible = isResolving
         }
+        override fun onCatalogReady() {
+            updateDownloadState()
+        }
         override fun onFavoriteChanged(url: String, isFavorite: Boolean) = bindFavorite()
         override fun onQueueChanged() = bindUpNext()
+        override fun onError(message: String) {
+            binding.loading.isVisible = false
+            Toast.makeText(this@NowPlayingActivity, message, Toast.LENGTH_LONG).show()
+        }
+        override fun onNotice(message: String) {
+            Toast.makeText(this@NowPlayingActivity, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private val progressRunnable = object : Runnable {
@@ -91,12 +126,20 @@ class NowPlayingActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return
             updateProgress()
             syncVolumeBar()
+            val entry = PlaybackCenter.currentEntry
+            val activeDl = entry != null && DownloadCenter.hasActiveDownload(this@NowPlayingActivity, entry.url)
             val now = SystemClock.uptimeMillis()
-            if (now - lastSlowTick >= 1000L) {
+            if (activeDl || now - lastSlowTick >= 1000L) {
                 lastSlowTick = now
                 updateDownloadState()
+                updateCenterStatusBadge()
             }
-            handler.postDelayed(this, if (PlaybackCenter.isPlaying) 250L else 1000L)
+            val delayMs = when {
+                activeDl -> 250L
+                PlaybackCenter.isPlaying -> 200L
+                else -> 800L
+            }
+            handler.postDelayed(this, delayMs)
         }
     }
 
@@ -117,10 +160,12 @@ class NowPlayingActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { finish() }
 
+        binding.lyricsText.movementMethod = LinkMovementMethod.getInstance()
+        binding.lyricsText.highlightColor = Color.TRANSPARENT
+
         // Upper-left dual mini buttons: [Audio] and [Video]
         binding.miniMusicBtn.setOnClickListener { view ->
             bounceButton(view)
-            // Already in Audio Player mode; ensure audio mode is active
             if (PlaybackCenter.mode != PlaybackCenter.Mode.AUDIO && !PlaybackCenter.audioOnlyMode) {
                 PlaybackCenter.switchToAudioPlayerMode()
             }
@@ -172,9 +217,23 @@ class NowPlayingActivity : AppCompatActivity() {
             bounceButton(view)
             restartRadio()
         }
+        binding.sleepTimerButton.setOnClickListener { view ->
+            bounceButton(view)
+            showSleepTimerAndEqSheet()
+        }
+        binding.scrubberEffectBadge.setOnClickListener { view ->
+            bounceButton(view)
+            showSleepTimerAndEqSheet()
+        }
         binding.downloadButton.setOnClickListener { view ->
             bounceButton(view)
             onDownloadClicked()
+        }
+        binding.downloadProgressCard.setOnClickListener { view ->
+            bounceButton(view)
+            val entry = PlaybackCenter.currentEntry ?: return@setOnClickListener
+            DownloadCenter.togglePauseResumeOrRetry(this, entry.url)
+            updateDownloadState()
         }
         binding.queueButton.setOnClickListener { view ->
             bounceButton(view)
@@ -185,8 +244,8 @@ class NowPlayingActivity : AppCompatActivity() {
         val density = resources.displayMetrics.density
         binding.lyricsOverlay.apply {
             background = GradientDrawable().apply {
-                cornerRadius = 14f * density
-                setColor(0xE6141418.toInt())
+                cornerRadius = 18f * density
+                setColor(0xD9121218.toInt())
             }
             clipToOutline = true
             outlineProvider = ViewOutlineProvider.BACKGROUND
@@ -220,12 +279,16 @@ class NowPlayingActivity : AppCompatActivity() {
 
             override fun onStartTrackingTouch(seekBar: SeekBar?) {
                 userSeeking = true
-                seekBar?.animate()?.scaleY(1.6f)?.setDuration(150)?.start()
+                seekBar?.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                seekBar?.animate()?.scaleY(1.85f)?.setDuration(160)?.start()
+                binding.scrubberEffectBadge.animate()?.scaleX(1.08f)?.scaleY(1.08f)?.setDuration(160)?.start()
             }
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 userSeeking = false
-                seekBar?.animate()?.scaleY(1f)?.setDuration(150)?.start()
+                seekBar?.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                seekBar?.animate()?.scaleY(1f)?.setDuration(180)?.start()
+                binding.scrubberEffectBadge.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(180)?.start()
                 seekBar?.let { PlaybackCenter.seekTo(it.progress.toLong()) }
             }
         })
@@ -284,31 +347,258 @@ class NowPlayingActivity : AppCompatActivity() {
     private fun toggleLyricsOverlay() {
         lyricsVisible = !lyricsVisible
         binding.lyricsOverlay.isVisible = lyricsVisible
-        binding.art.alpha = if (lyricsVisible) 0.18f else 1f
-        binding.lyricsButton.alpha = if (lyricsVisible) 1f else 0.75f
+        binding.art.alpha = if (lyricsVisible) 0.16f else 1f
+        binding.lyricsButton.alpha = if (lyricsVisible) 1f else 0.8f
         binding.lyricsButton.setColorFilter(
             if (lyricsVisible) getColor(R.color.music_green) else Color.WHITE
         )
-        updateLyricsContent()
+        lastHighlightedLyricIdx = -2
+        renderLyricsAtPosition(PlaybackCenter.positionMs)
     }
 
-    private fun updateLyricsContent() {
+    private fun offlineLrcFile(url: String): File {
+        val dir = File(DownloadCenter.resolveDownloadDir(this, DownloadCenter.TYPE_AUDIO), "lyrics").apply { mkdirs() }
+        return File(dir, "${DownloadCenter.videoIdOf(url)}.lrc")
+    }
+
+    private fun saveOfflineLrcIfNeeded(url: String, res: LyricsResult) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val f = offlineLrcFile(url)
+                if (res.syncedLines.isNotEmpty()) {
+                    val content = res.syncedLines.joinToString("\n") { line ->
+                        val min = line.timeMs / 60_000L
+                        val sec = (line.timeMs % 60_000L) / 1000L
+                        val cs = (line.timeMs % 1000L) / 10L
+                        String.format(Locale.US, "[%02d:%02d.%02d]%s", min, sec, cs, line.text)
+                    }
+                    f.writeText(content)
+                } else if (res.plainLyrics.isNotBlank()) {
+                    f.writeText(res.plainLyrics)
+                }
+            }
+        }
+    }
+
+    private suspend fun loadOfflineLrc(url: String): LyricsResult? = withContext(Dispatchers.IO) {
+        runCatching {
+            val f = offlineLrcFile(url)
+            if (!f.exists()) return@withContext null
+            val raw = f.readText()
+            if (raw.isBlank()) return@withContext null
+            val regex = Regex("\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,3}))?](.*)")
+            val lines = mutableListOf<LyricLine>()
+            raw.lineSequence().forEach { line ->
+                val m = regex.find(line.trim()) ?: return@forEach
+                val min = m.groupValues[1].toLongOrNull() ?: 0L
+                val sec = m.groupValues[2].toLongOrNull() ?: 0L
+                val frac = m.groupValues[3]
+                val ms = when (frac.length) {
+                    1 -> (frac.toLongOrNull() ?: 0L) * 100L
+                    2 -> (frac.toLongOrNull() ?: 0L) * 10L
+                    3 -> frac.toLongOrNull() ?: 0L
+                    else -> 0L
+                }
+                val txt = m.groupValues[4].trim()
+                if (txt.isNotBlank()) lines.add(LyricLine(min * 60_000L + sec * 1000L + ms, txt))
+            }
+            LyricsResult(lines, if (lines.isEmpty()) raw else "")
+        }.getOrNull()
+    }
+
+    private fun fetchLyricsIfNeeded(entry: QueueEntry) {
+        if (lyricsForUrl == entry.url) return
+        lyricsForUrl = entry.url
+        currentLyrics = null
+        lastHighlightedLyricIdx = -2
+        lyricsJob?.cancel()
+        lyricsJob = lifecycleScope.launch {
+            val cached = loadOfflineLrc(entry.url)
+            val res = cached ?: YtRepository.fetchSyncedLyrics(entry.title, entry.uploader)?.also {
+                saveOfflineLrcIfNeeded(entry.url, it)
+            }
+            if (lyricsForUrl != entry.url) return@launch
+            currentLyrics = res
+            lastHighlightedLyricIdx = -2
+            updateCenterStatusBadge()
+            if (lyricsVisible) {
+                renderLyricsAtPosition(PlaybackCenter.positionMs)
+            }
+        }
+    }
+
+    private fun renderLyricsAtPosition(positionMs: Long) {
+        if (!lyricsVisible) return
         val entry = PlaybackCenter.currentEntry ?: return
-        val desc = PlaybackCenter.catalog?.description?.trim().orEmpty()
+        val lrc = currentLyrics
+        val synced = lrc?.syncedLines.orEmpty()
+
+        if (synced.isNotEmpty()) {
+            val activeIdx = synced.indexOfLast { it.timeMs <= positionMs + 250L }.coerceAtLeast(0)
+            if (activeIdx == lastHighlightedLyricIdx) return
+            lastHighlightedLyricIdx = activeIdx
+
+            val sb = SpannableStringBuilder()
+            val headerStart = sb.length
+            sb.append("♪ SYNCED LYRICS (TAP LINE TO SEEK)\n\n")
+            sb.setSpan(ForegroundColorSpan(0xFFFF4D6A.toInt()), headerStart, sb.length, 0)
+            sb.setSpan(RelativeSizeSpan(0.72f), headerStart, sb.length, 0)
+            sb.setSpan(StyleSpan(android.graphics.Typeface.BOLD), headerStart, sb.length, 0)
+
+            var activeCharOffset = 0
+            synced.forEachIndexed { idx, line ->
+                val start = sb.length
+                if (idx == activeIdx) activeCharOffset = start
+                sb.append(line.text).append("\n\n")
+                val end = sb.length
+
+                val targetMs = line.timeMs
+                sb.setSpan(
+                    object : ClickableSpan() {
+                        override fun onClick(widget: View) {
+                            widget.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            PlaybackCenter.seekTo(targetMs)
+                            lastHighlightedLyricIdx = -2
+                            renderLyricsAtPosition(targetMs)
+                        }
+
+                        override fun updateDrawState(ds: TextPaint) {
+                            ds.isUnderlineText = false
+                        }
+                    },
+                    start,
+                    end,
+                    0
+                )
+
+                if (idx == activeIdx) {
+                    sb.setSpan(StyleSpan(android.graphics.Typeface.BOLD), start, end, 0)
+                    sb.setSpan(RelativeSizeSpan(1.22f), start, end, 0)
+                    sb.setSpan(ForegroundColorSpan(Color.WHITE), start, end, 0)
+                } else {
+                    sb.setSpan(ForegroundColorSpan(0x66FFFFFF), start, end, 0)
+                }
+            }
+            binding.lyricsText.text = sb
+            binding.lyricsText.post {
+                val layout = binding.lyricsText.layout ?: return@post
+                val lineNum = layout.getLineForOffset(activeCharOffset.coerceIn(0, sb.length))
+                val targetY = (layout.getLineTop(lineNum) - binding.lyricsOverlay.height / 3).coerceAtLeast(0)
+                binding.lyricsOverlay.smoothScrollTo(0, targetY)
+            }
+            return
+        }
+
+        if (lastHighlightedLyricIdx == -1) return
+        lastHighlightedLyricIdx = -1
+        val plain = lrc?.plainLyrics?.takeIf { it.isNotBlank() }
+            ?: PlaybackCenter.catalogForCurrentEntry()?.description?.trim().orEmpty()
         val sb = SpannableStringBuilder()
         val titleStart = sb.length
         sb.append(entry.title).append('\n')
         sb.setSpan(StyleSpan(android.graphics.Typeface.BOLD), titleStart, sb.length, 0)
-        sb.setSpan(RelativeSizeSpan(1.3f), titleStart, sb.length, 0)
+        sb.setSpan(RelativeSizeSpan(1.25f), titleStart, sb.length, 0)
         val artistStart = sb.length
         sb.append(entry.uploader).append("\n\n")
         sb.setSpan(ForegroundColorSpan(0xB3FFFFFF.toInt()), artistStart, sb.length, 0)
-        sb.append(if (desc.isNotBlank()) desc else "No description available for this track.")
+        sb.append(if (plain.isNotBlank()) plain else "Fetching synced lyrics…")
         binding.lyricsText.text = sb
+    }
+
+    private fun updateCenterStatusBadge() {
+        val sleepRem = PlaybackCenter.sleepTimerRemainingMs
+        val hasSynced = currentLyrics?.syncedLines?.isNotEmpty() == true
+        val eqActive = !PlaybackCenter.currentEqPresetLabel.startsWith("Flat")
+        val fadeSec = AppPrefs.crossfadeSeconds
+        val fadeTag = if (fadeSec > 0) " · XFADE ${fadeSec}S" else ""
+        val isOffline = PlaybackCenter.currentEntry?.url?.startsWith("file://") == true
+        val sourceTag = if (isOffline) "OFFLINE" else "HIGH BITRATE"
+
+        binding.sleepTimerButton.setColorFilter(
+            if (sleepRem > 0L || eqActive || fadeSec > 0) getColor(R.color.music_green) else Color.WHITE
+        )
+
+        binding.scrubberEffectBadge.text = when {
+            sleepRem > 0L -> "☾ ${(sleepRem / 60_000L) + 1}M · ${PlaybackCenter.currentEqPresetLabel.substringBefore(" ").uppercase(Locale.US)}$fadeTag"
+            hasSynced -> "♪ SYNCED LYRICS · ${PlaybackCenter.currentEqPresetLabel.substringBefore(" ").uppercase(Locale.US)}$fadeTag"
+            else -> "$sourceTag · ${PlaybackCenter.currentEqPresetLabel.substringBefore(" ").uppercase(Locale.US)}$fadeTag"
+        }
+    }
+
+    private fun showSleepTimerAndEqSheet() {
+        val fadeLabel = if (AppPrefs.crossfadeSeconds > 0) "${AppPrefs.crossfadeSeconds}s" else "Off"
+        ActionSheet.show(
+            this,
+            "Sleep Timer, Crossfade & Audio Studio",
+            "Preset: ${PlaybackCenter.currentEqPresetLabel} · Crossfade: $fadeLabel",
+            listOf(
+                ActionSheet.Item("⇄ Audio Crossfade: 4s (Smooth)", accent = AppPrefs.crossfadeSeconds == 4) {
+                    AppPrefs.crossfadeSeconds = 4
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio Crossfade: 4 seconds", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("⇄ Audio Crossfade: 8s (Club Mix)", accent = AppPrefs.crossfadeSeconds == 8) {
+                    AppPrefs.crossfadeSeconds = 8
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio Crossfade: 8 seconds", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("⇄ Audio Crossfade: Off") {
+                    AppPrefs.crossfadeSeconds = 0
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio Crossfade: Off", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("☾ Sleep Timer: 15 Minutes") {
+                    PlaybackCenter.startSleepTimer(15)
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Sleep timer set for 15 minutes", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("☾ Sleep Timer: 30 Minutes") {
+                    PlaybackCenter.startSleepTimer(30)
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Sleep timer set for 30 minutes", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("☾ Sleep Timer: 60 Minutes") {
+                    PlaybackCenter.startSleepTimer(60)
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Sleep timer set for 60 minutes", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("☾ Turn Off Sleep Timer") {
+                    PlaybackCenter.startSleepTimer(0)
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Sleep timer off", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Bass Boost (+8 dB)", accent = true) {
+                    PlaybackCenter.applyAudioPreset(1, "Bass Boost")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Bass Boost Active", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Vocal & Acoustic") {
+                    PlaybackCenter.applyAudioPreset(2, "Vocal Studio")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Vocal Studio Active", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Electronic / Club") {
+                    PlaybackCenter.applyAudioPreset(3, "Club Electronic")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Club Electronic Active", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Flat (Default)") {
+                    PlaybackCenter.applyAudioPreset(0, "Flat (Default)")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Flat", Toast.LENGTH_SHORT).show()
+                }
+            )
+        )
     }
 
     private fun showAppleMusicOptionsDialog() {
         val entry = PlaybackCenter.currentEntry ?: return
+        val shareUrl = if (entry.url.startsWith("file://")) {
+            DownloadCenter.recordsFor(this, entry.url).firstOrNull()?.sourceUrl?.takeIf { it.startsWith("http") }
+                ?: "https://www.youtube.com/watch?v=${DownloadCenter.videoIdOf(entry.url)}"
+        } else {
+            entry.url
+        }
         ActionSheet.show(
             this, entry.title, entry.uploader,
             listOf(
@@ -317,12 +607,18 @@ class NowPlayingActivity : AppCompatActivity() {
                     PlayerActivity.startResume(this)
                     finish()
                 },
+                ActionSheet.Item("Crossfade, Sleep Timer & Equalizer") {
+                    showSleepTimerAndEqSheet()
+                },
                 ActionSheet.Item("Start Station") { restartRadio() },
-                ActionSheet.Item("Download") { onDownloadClicked() },
+                ActionSheet.Item("Download (Audio + .lrc Lyrics)") { onDownloadClicked() },
+                ActionSheet.Item("YouTube Account (${YouTubeAuth.accountSummary()})") {
+                    YouTubeLoginActivity.start(this)
+                },
                 ActionSheet.Item("Share Song Link") {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, "${entry.title} — ${entry.url}")
+                        putExtra(Intent.EXTRA_TEXT, "${entry.title} — $shareUrl")
                     }
                     startActivity(Intent.createChooser(send, getString(R.string.share_via)))
                 }
@@ -513,9 +809,11 @@ class NowPlayingActivity : AppCompatActivity() {
         super.onStop()
         PlaybackCenter.removeListener(playbackListener)
         handler.removeCallbacks(progressRunnable)
+        binding.audioVisualizer.setPlaying(false)
     }
 
     override fun onDestroy() {
+        downloadResolveJob?.cancel()
         backdropRequest?.dispose()
         backdropRequest = null
         velocity?.recycle()
@@ -530,21 +828,24 @@ class NowPlayingActivity : AppCompatActivity() {
         binding.title.text = entry.title
         binding.title.isSelected = true
         binding.subtitle.text = entry.uploader
-        if (entry.thumbnailUrl != boundUrl) {
-            boundUrl = entry.thumbnailUrl
+        val artKey = "${entry.url}|${entry.thumbnailUrl}"
+        if (artKey != boundArtKey) {
+            boundArtKey = artKey
             Thumbs.load(binding.art, entry.thumbnailUrl)
             applyDynamicArtworkBackdrop(entry.thumbnailUrl)
         }
-        if (lyricsVisible) updateLyricsContent()
+        fetchLyricsIfNeeded(entry)
         bindPlayButton()
         bindFavorite()
         bindUpNext()
         updateProgress()
         updateDownloadState()
+        updateCenterStatusBadge()
     }
 
     private fun bindPlayButton() {
         val isPlaying = PlaybackCenter.isPlaying
+        binding.audioVisualizer.setPlaying(isPlaying && AppPrefs.animations)
         binding.playPauseButton.setImageResource(
             if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
         )
@@ -622,9 +923,18 @@ class NowPlayingActivity : AppCompatActivity() {
         val position = PlaybackCenter.positionMs.coerceAtLeast(0L)
         binding.seekBar.max = if (duration > 0) duration.toInt() else 0
         binding.seekBar.setProgress(position.toInt(), PlaybackCenter.isPlaying)
+        if (PlaybackCenter.isPlaying && AppPrefs.animations) {
+            val pulse = 0.88f + 0.12f * sin(SystemClock.uptimeMillis() / 280.0).toFloat()
+            binding.seekBar.alpha = pulse
+        } else {
+            binding.seekBar.alpha = 1f
+        }
         binding.position.text = formatTime(position)
         val remaining = (duration - position).coerceAtLeast(0L)
         binding.duration.text = "-${formatTime(remaining)}"
+        if (lyricsVisible) {
+            renderLyricsAtPosition(position)
+        }
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -642,18 +952,34 @@ class NowPlayingActivity : AppCompatActivity() {
 
     private fun restartRadio() {
         val entry = PlaybackCenter.currentEntry ?: return
-        PlaybackCenter.playMusic(entry, radio = true)
+        val targetUrl = if (entry.url.startsWith("file://")) {
+            DownloadCenter.recordsFor(this, entry.url).firstOrNull()?.sourceUrl?.takeIf { it.startsWith("http") }
+                ?: DownloadCenter.videoIdOf(entry.url).takeIf { it.isNotBlank() }
+                    ?.let { "https://www.youtube.com/watch?v=$it" }
+                ?: entry.url
+        } else {
+            entry.url
+        }
+        PlaybackCenter.playMusic(entry.copy(url = targetUrl, isMusic = true), radio = true)
         Toast.makeText(this, R.string.radio_started, Toast.LENGTH_SHORT).show()
         showQueue()
     }
 
     private fun onDownloadClicked() {
         val entry = PlaybackCenter.currentEntry ?: return
-        if (DownloadCenter.isDownloaded(this, entry.url)) {
-            Toast.makeText(this, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
-            return
+        currentLyrics?.let { saveOfflineLrcIfNeeded(entry.url, it) }
+        when {
+            entry.url.startsWith("file://") || DownloadCenter.isDownloaded(this, entry.url) -> {
+                Toast.makeText(this, R.string.already_downloaded, Toast.LENGTH_SHORT).show()
+            }
+            DownloadCenter.hasActiveDownload(this, entry.url) ||
+                DownloadCenter.hasPausedDownload(this, entry.url) ||
+                DownloadCenter.hasFailedDownload(this, entry.url) -> {
+                DownloadCenter.togglePauseResumeOrRetry(this, entry.url)
+                updateDownloadState()
+            }
+            else -> showDownloadSheet()
         }
-        showDownloadSheet()
     }
 
     private fun updateDownloadState() {
@@ -663,33 +989,84 @@ class NowPlayingActivity : AppCompatActivity() {
             DownloadCenter.refreshStatuses(this)
         }
         when {
-            DownloadCenter.isDownloaded(this, entry.url) -> {
+            entry.url.startsWith("file://") || DownloadCenter.isDownloaded(this, entry.url) -> {
                 binding.downloadButton.setImageResource(R.drawable.ic_check)
                 binding.downloadButton.setColorFilter(getColor(R.color.music_green))
-                binding.downloadStatus.isVisible = false
+                binding.downloadProgressCard.isVisible = false
             }
             DownloadCenter.hasActiveDownload(this, entry.url) -> {
-                binding.downloadButton.setImageResource(R.drawable.ic_download)
+                binding.downloadButton.setImageResource(R.drawable.ic_pause)
+                binding.downloadButton.setColorFilter(getColor(R.color.music_green))
+                val percent = DownloadCenter.downloadProgress(this, entry.url).coerceIn(0, 100)
+                val bytesText = DownloadCenter.downloadBytesText(this, entry.url)
+                val baseText = getString(R.string.downloading_fmt, percent)
+                binding.downloadStatus.text = if (bytesText.isNotBlank()) {
+                    "⏸ $baseText ($bytesText) · Tap to Pause"
+                } else {
+                    "⏸ $baseText · Tap to Pause"
+                }
+                binding.downloadProgressBar.isIndeterminate = percent == 0 && bytesText.isBlank()
+                binding.downloadProgressBar.progress = percent
+                binding.downloadProgressBar.alpha = 1.0f
+                binding.downloadProgressCard.isVisible = true
+            }
+            DownloadCenter.hasPausedDownload(this, entry.url) -> {
+                binding.downloadButton.setImageResource(R.drawable.ic_play_arrow)
+                binding.downloadButton.setColorFilter(getColor(R.color.music_green))
+                val percent = DownloadCenter.downloadProgress(this, entry.url).coerceIn(0, 100)
+                val bytesText = DownloadCenter.downloadBytesText(this, entry.url)
+                val baseText = getString(R.string.paused_fmt, percent)
+                binding.downloadStatus.text = if (bytesText.isNotBlank()) {
+                    "▶ $baseText ($bytesText) · Tap to Resume"
+                } else {
+                    "▶ $baseText · Tap to Resume"
+                }
+                binding.downloadProgressBar.isIndeterminate = false
+                binding.downloadProgressBar.progress = percent
+                binding.downloadProgressBar.alpha = 0.6f
+                binding.downloadProgressCard.isVisible = true
+            }
+            DownloadCenter.hasFailedDownload(this, entry.url) -> {
+                binding.downloadButton.setImageResource(R.drawable.ic_player_replay)
                 binding.downloadButton.setColorFilter(Color.WHITE)
-                val percent = DownloadCenter.downloadProgress(this, entry.url)
-                binding.downloadStatus.text = getString(R.string.downloading_fmt, percent)
-                binding.downloadStatus.isVisible = true
+                binding.downloadStatus.text = "↻ Download failed · Tap to Retry"
+                binding.downloadProgressBar.isIndeterminate = false
+                binding.downloadProgressBar.progress = 0
+                binding.downloadProgressCard.isVisible = true
             }
             else -> {
                 binding.downloadButton.setImageResource(R.drawable.ic_download)
                 binding.downloadButton.setColorFilter(Color.WHITE)
-                binding.downloadStatus.isVisible = false
+                binding.downloadProgressCard.isVisible = false
             }
         }
     }
 
     private fun showDownloadSheet() {
         val entry = PlaybackCenter.currentEntry ?: return
-        val catalog = PlaybackCenter.catalog ?: run {
-            Toast.makeText(this, R.string.error_no_streams, Toast.LENGTH_SHORT).show()
+        val verifiedCatalog = PlaybackCenter.catalogForCurrentEntry()
+        if (verifiedCatalog != null) {
+            DownloadSheet(this, entry, verifiedCatalog, audioOnly = true) {
+                updateDownloadState()
+            }.show()
             return
         }
-        DownloadSheet(this, entry, catalog, audioOnly = true).show()
+        downloadResolveJob?.cancel()
+        binding.loading.isVisible = true
+        downloadResolveJob = lifecycleScope.launch {
+            try {
+                val info = YtRepository.streamInfo(entry.url)
+                if (PlaybackCenter.currentEntry?.url != entry.url) return@launch
+                val freshCatalog = StreamCatalog(info, entry.url)
+                DownloadSheet(this@NowPlayingActivity, entry, freshCatalog, audioOnly = true) {
+                    updateDownloadState()
+                }.show()
+            } catch (_: Exception) {
+                Toast.makeText(this@NowPlayingActivity, R.string.error_no_streams, Toast.LENGTH_SHORT).show()
+            } finally {
+                binding.loading.isVisible = PlaybackCenter.isResolving
+            }
+        }
     }
 
     private fun formatTime(ms: Long): String {

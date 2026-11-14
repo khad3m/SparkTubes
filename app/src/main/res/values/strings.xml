@@ -85,6 +85,18 @@
     <string name="action_speed">Playback speed</string>
     <string name="action_quality">Quality</string>
     <string name="action_audio_track">Audio track</string>
+    <string name="action_screen_lock">Lock screen</string>
+    <string name="screen_locked_toast">Screen locked — tap unlock button to restore controls</string>
+    <string name="screen_unlocked_toast">Screen unlocked</string>
+    <string name="tap_to_unlock">🔓 Tap to unlock screen</string>
+    <string name="subtitles_section">Subtitles / CC (বাংলা)</string>
+    <string name="subtitles_bangla_auto">বাংলা (Auto-Translate)</string>
+    <string name="subtitles_original">Original Subtitles (CC)</string>
+    <string name="subtitles_off">Off</string>
+    <string name="subtitles_unavailable">No subtitles available for this video</string>
+    <string name="settings_crossfade">Audio crossfade</string>
+    <string name="crossfade_off">Off</string>
+    <string name="crossfade_fmt">%1$d seconds</string>
     <string name="quality_auto">Auto (best available)</string>
     <string name="quality_audio_only">Audio only</string>
     <string name="speed_label">Playback speed</string>
@@ -103,6 +115,8 @@
 
     <!-- Downloads -->
     <string name="download_started">Download started</string>
+    <string name="download_resumed">Download resumed</string>
+    <string name="download_retrying">Retrying download…</string>
     <string name="download_audio_section">Audio only</string>
     <string name="download_video_section">Video only</string>
     <string name="download_av_section">Video + Audio</string>
@@ -112,11 +126,17 @@
     <string name="download_deleted">Download deleted</string>
     <string name="download_status_pending">Waiting</string>
     <string name="download_status_running">Downloading</string>
+    <string name="download_status_paused">Paused</string>
     <string name="download_status_done">Completed</string>
     <string name="download_status_failed">Failed</string>
     <string name="download_type_audio">Audio</string>
     <string name="download_type_video">Video</string>
     <string name="download_type_av">Video + Audio</string>
+    <string name="settings_download_folder">Download folder (Local storage)</string>
+    <string name="download_folder_public">Local Storage: Download/SparkTube (Default)</string>
+    <string name="download_folder_media">Local Storage: Music &amp; Movies/SparkTube</string>
+    <string name="download_folder_custom">Choose custom folder…</string>
+    <string name="download_folder_private">App private folder (Android/data)</string>
 
     <!-- Music -->
     <string name="music_trending_shelf">Trending now</string>
@@ -250,6 +270,7 @@
     <string name="downloaded_label">Downloaded</string>
     <string name="already_downloaded">Already downloaded — see your downloads list</string>
     <string name="downloading_fmt">Downloading • %1$d%%</string>
+    <string name="paused_fmt">Paused • %1$d%%</string>
     <string name="download_option_done">Downloaded</string>
 
     <!-- Playlists -->
@@ -320,4 +341,22 @@
     <string name="playing_from_queue">Playing from your queue</string>
     <string name="music_play_all">Play all</string>
     <string name="music_songs_fmt">%1$d songs</string>
+
+    <!-- YouTube / Google Account Sign-In & Unlock Engine -->
+    <string name="youtube_login_title">Sign in to YouTube (Google)</string>
+    <string name="youtube_login_subtitle">Unlocks age-restricted (18+) &amp; login-required videos</string>
+    <string name="youtube_login_done">Save &amp; Done</string>
+    <string name="youtube_login_success">Google Account connected! Restricted videos unlocked.</string>
+    <string name="youtube_login_not_completed">Please complete Google Sign-In first, then tap Save &amp; Done</string>
+    <string name="youtube_webview_unavailable">Android System WebView is not available on this device</string>
+    <string name="youtube_account_title">YouTube / Google Account</string>
+    <string name="youtube_account_connected">Google Account Connected ✓</string>
+    <string name="youtube_account_connected_sub">Age-restricted &amp; login-only videos unlocked · Tap to manage</string>
+    <string name="youtube_account_disconnected_sub">Sign in to play age-restricted &amp; login-required videos</string>
+    <string name="youtube_sign_in_short">SIGN IN</string>
+    <string name="youtube_account_active_badge">ACTIVE</string>
+    <string name="youtube_account_relogin">Refresh / Switch Google Account</string>
+    <string name="youtube_account_sign_out">Sign out (Clear YouTube cookies)</string>
+    <string name="youtube_signed_out_toast">Signed out of YouTube account</string>
+    <string name="youtube_unlock_sign_in_btn">Sign in with Google to Unlock</string>
 </resources>

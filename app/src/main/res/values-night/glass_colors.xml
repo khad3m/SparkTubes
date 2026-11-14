@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Glassmorphism surfaces (dark theme): smoky translucent white with a bright hairline -->
-    <color name="glass_top">#2EFFFFFF</color>
-    <color name="glass_bottom">#12FFFFFF</color>
-    <color name="glass_stroke">#33FFFFFF</color>
+    <!-- Ultra-transparent Glassmorphism surfaces (dark theme): crystal smoky glass with whisper-thin border -->
+    <color name="glass_top">#18FFFFFF</color>
+    <color name="glass_bottom">#08FFFFFF</color>
+    <color name="glass_stroke">#14FFFFFF</color>
     <color name="accent_text">#FF4D6A</color>
-    <color name="nav_glass_top">#F23A3A42</color>
-    <color name="nav_glass_bottom">#E61F1F24</color>
-    <color name="glass_sheet">#F01C1C20</color>
+    <color name="nav_glass_top">#8C24242C</color>
+    <color name="nav_glass_bottom">#66121217</color>
+    <color name="glass_sheet">#D916161B</color>
 </resources>

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widgetRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_mini_player"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="14dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="10dp"
+    android:paddingBottom="10dp">
+
+    <ImageView
+        android:id="@+id/widgetIcon"
+        android:layout_width="42dp"
+        android:layout_height="42dp"
+        android:background="@drawable/bg_circle_red"
+        android:importantForAccessibility="no"
+        android:padding="10dp"
+        android:src="@drawable/ic_music_note"
+        android:tint="@color/white" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widgetTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="SparkTube Glass Player"
+            android:textColor="@color/on_surface"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widgetSubtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Tap to play music or videos"
+            android:textColor="@color/on_surface_variant"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/widgetPrev"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/cd_previous"
+        android:padding="7dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_skip_previous"
+        android:tint="@color/on_surface" />
+
+    <ImageButton
+        android:id="@+id/widgetPlayPause"
+        android:layout_width="42dp"
+        android:layout_height="42dp"
+        android:layout_marginStart="2dp"
+        android:layout_marginEnd="2dp"
+        android:background="@drawable/bg_glass_circle"
+        android:contentDescription="@string/cd_play"
+        android:padding="9dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_play_arrow"
+        android:tint="@color/on_surface" />
+
+    <ImageButton
+        android:id="@+id/widgetNext"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/cd_next"
+        android:padding="7dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_skip_next"
+        android:tint="@color/on_surface" />
+</LinearLayout>

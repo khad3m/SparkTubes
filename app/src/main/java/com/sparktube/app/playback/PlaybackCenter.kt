@@ -2,7 +2,10 @@ package com.sparktube.app.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer
 import android.net.Uri
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
@@ -23,21 +26,23 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import android.os.SystemClock
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
+import com.google.common.util.concurrent.ListenableFuture
 import com.sparktube.app.data.DownloadRecord
-import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.LiveFilter
+import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.data.VideoEntry
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.net.OkHttpDownloader
+import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.net.ParallelRangeDataSource
+import com.sparktube.app.ui.widget.SparkTubeWidgetProvider
 import com.sparktube.app.util.AppPrefs
-import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,27 +57,19 @@ import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.AudioTrackType
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import org.schabi.newpipe.extractor.stream.SubtitlesStream
 import org.schabi.newpipe.extractor.stream.VideoStream
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Thrown wherever a resolved stream turns out to be a live broadcast, which
- * SparkTube intentionally never plays. Kept as its own type (rather than a
- * magic "LIVE_CONTENT" string inside a generic exception) so callers can
- * detect it with `is LiveContentException` instead of substring-matching an
- * error message, which silently stops working if the message ever changes.
- */
 class LiveContentException :
     IOException("This is a live stream, which SparkTube doesn't support playing.")
 
-/** Best-effort height: itag height or parsed from the resolution string ("1080p60"). */
 fun VideoStream.effectiveHeight(): Int =
     if (height > 0) height else StreamCatalog.resolutionHeight(resolution)
 
-/** One item in the play queue (resolved lazily when it starts playing). */
 data class QueueEntry(
     val url: String,
     val title: String,
@@ -82,7 +79,6 @@ data class QueueEntry(
     val isMusic: Boolean = false
 )
 
-/** A group of audio streams that share the same dubbing language. */
 data class AudioTrackGroup(
     val id: String,
     val label: String,
@@ -92,9 +88,10 @@ data class AudioTrackGroup(
     val best: AudioStream? get() = streams.filter { it.isUrl }.maxByOrNull { it.averageBitrate }
 }
 
-/** Cleaned-up stream catalogue for the currently loaded item. */
-class StreamCatalog(info: StreamInfo) {
+class StreamCatalog(info: StreamInfo, requestedUrl: String = "") {
 
+    val url: String = info.url?.takeIf { it.isNotBlank() } ?: requestedUrl
+    val videoId: String = DownloadCenter.videoIdOf(url.ifBlank { requestedUrl })
     val name: String = info.name ?: ""
     val uploaderUrl: String = info.uploaderUrl ?: ""
     val uploaderName: String = info.uploaderName ?: ""
@@ -102,36 +99,27 @@ class StreamCatalog(info: StreamInfo) {
     val viewCount: Long = info.viewCount
     val durationSec: Long = info.duration
 
-    /** Video description (HTML for YouTube) — folded/unfolded on the watch page. */
     val description: String = info.description?.content.orEmpty()
     val descriptionIsHtml: Boolean =
         info.description?.type == org.schabi.newpipe.extractor.stream.Description.HTML
 
-    /** Relative upload date, e.g. "3 days ago" (empty when unknown). */
     val uploadDateText: String =
         com.sparktube.app.util.Formatters.formatRelativeTime(info.textualUploadDate)
     val likeCount: Long = info.likeCount
 
-    /** Video-only adaptive streams (higher qualities), distinct heights, best first. */
     val videoOnly: List<VideoStream> = info.videoOnlyStreams
         .filter { it.isUrl && it.effectiveHeight() > 0 }
         .distinctBy { it.effectiveHeight() }
         .sortedByDescending { it.effectiveHeight() }
 
-    /**
-     * Every video-only stream (all codecs / fps variants, not de-duplicated by
-     * height): the raw material for the adaptive DASH start ([DashSources]).
-     */
     val allVideoOnly: List<VideoStream> = info.videoOnlyStreams
         .filter { it.isUrl && it.effectiveHeight() > 0 }
 
-    /** Progressive (muxed) streams, fallback only. */
     val muxed: List<VideoStream> = info.videoStreams
         .filter { it.isUrl && it.effectiveHeight() > 0 }
         .distinctBy { it.effectiveHeight() }
         .sortedByDescending { it.effectiveHeight() }
 
-    /** Audio streams grouped into dubbing languages. */
     val audioTracks: List<AudioTrackGroup> = info.audioStreams
         .filter { it.isUrl }
         .groupBy { it.audioTrackId ?: it.audioTrackName ?: "default" }
@@ -147,7 +135,9 @@ class StreamCatalog(info: StreamInfo) {
         }
         .sortedWith(compareByDescending<AudioTrackGroup> { it.isOriginal }.thenBy { it.label })
 
-    /** Related videos for the watch page (already live-filtered). */
+    val subtitles: List<SubtitlesStream> = info.subtitles
+        .filter { it.isUrl && !it.content.isNullOrBlank() }
+
     val related: List<StreamInfoItem> = LiveFilter.sanitize(info.relatedItems)
 
     val hasVideo: Boolean get() = videoOnly.isNotEmpty() || muxed.isNotEmpty()
@@ -166,13 +156,15 @@ class StreamCatalog(info: StreamInfo) {
 }
 
 /**
- * App-wide playback engine. Owns the single ExoPlayer instance that the
- * watch page, the mini player, the music screen and the media notification
- * all attach to, so playback survives screen changes and app close.
- *
- * Video mode uses a single merged source. Music mode builds a real
- * playlist whose items are resolved on demand, so the media notification
- * gets native previous / next / seek controls.
+ * App-wide playback engine with:
+ * - Seamless Dual Audio <-> Video Mode switching (online & offline `file://` / `TYPE_AV` aware)
+ * - Strict `StreamCatalog` ownership verification (`catalogForCurrentEntry`) so downloads and stream caches
+ *   never mix metadata of one song with the audio stream of another song
+ * - Full-queue preservation for offline Downloads and Favorites lists
+ * - Strict Music-Only radio queue building (`LiveFilter.isMusicTrack`)
+ * - Smooth Audio Crossfade (`AppPrefs.crossfadeSeconds`) between songs
+ * - Sleep Timer (`startSleepTimer`, `sleepTimerRemainingMs`)
+ * - Hardware Audio Equalizer & BassBoost presets (`applyAudioPreset`) with safe session re-binding
  */
 @OptIn(UnstableApi::class)
 object PlaybackCenter {
@@ -186,13 +178,9 @@ object PlaybackCenter {
         fun onPlaybackStateChanged(isPlaying: Boolean) {}
         fun onQueueChanged() {}
         fun onError(message: String) {}
-
-        /** A resolved item turned out to be live content — see [LiveContentException]. */
         fun onLiveContentBlocked() {}
         fun onFavoriteChanged(url: String, isFavorite: Boolean) {}
         fun onAudioOnlyChanged(audioOnly: Boolean) {}
-
-        /** Short user-facing hint ("switched to the default audio track", …). */
         fun onNotice(message: String) {}
     }
 
@@ -203,8 +191,6 @@ object PlaybackCenter {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    // Radio sizing: first batch, refill threshold / batch, and the minimum
-    // number of upcoming songs before the artist-search top-up kicks in.
     private const val RADIO_FIRST_BATCH = 30
     private const val RADIO_BATCH = 20
     private const val RADIO_REFILL_BELOW = 10
@@ -212,13 +198,9 @@ object PlaybackCenter {
     private var playerRef: ExoPlayer? = null
     private var resolveJob: Job? = null
 
-    // ----- Startup watchdog (auto quality downshift) -----
-
     private var watchdogJob: Job? = null
     private var watchdogDownshifts = 0
     private var downshiftHeight: Int? = null
-
-    // ----- Adaptive (DASH) start -----
 
     private var dashActive = false
     private var dashBlocked = false
@@ -227,16 +209,157 @@ object PlaybackCenter {
     private val STARTUP_LIMIT_MS = 10_000L
     private val STALL_LIMIT_MS = 4_000L
 
-    /** Items of the music playlist that have not been resolved yet. */
     private val pendingMusic = ConcurrentHashMap<String, QueueEntry>()
     private val musicItemId = AtomicLong(0L)
-
-    /** Already-resolved audio URLs for music queue entries (entry.url -> Uri). */
     private val musicUriCache = ConcurrentHashMap<String, Uri>()
-
     private var prefetchJob: Job? = null
 
     private var controllerFuture: ListenableFuture<MediaController>? = null
+
+    // ----- Sleep Timer & Audio Equalizer / Bass Boost -----
+    private var sleepTimerJob: Job? = null
+    @Volatile var sleepTimerEndRealtimeMs: Long = 0L
+        private set
+
+    private var equalizer: Equalizer? = null
+    private var bassBoost: BassBoost? = null
+    private var boundAudioSessionId: Int = C.AUDIO_SESSION_ID_UNSET
+    private var currentEqPresetIndex: Int = 0
+    var currentEqPresetLabel: String = "Flat (Default)"
+        private set
+
+    // ----- Smooth Audio Crossfade Engine -----
+    private var crossfadeMonitorJob: Job? = null
+    private var crossfadeRampJob: Job? = null
+    private var lastCrossfadeMediaIndex: Int = -1
+
+    val sleepTimerRemainingMs: Long
+        get() {
+            if (sleepTimerEndRealtimeMs <= 0L) return 0L
+            return (sleepTimerEndRealtimeMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        }
+
+    fun startSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        if (minutes <= 0) {
+            sleepTimerEndRealtimeMs = 0L
+            return
+        }
+        val durationMs = minutes * 60_000L
+        sleepTimerEndRealtimeMs = SystemClock.elapsedRealtime() + durationMs
+        sleepTimerJob = scope.launch {
+            delay(durationMs)
+            sleepTimerEndRealtimeMs = 0L
+            playerRef?.pause()
+            notify { it.onNotice("Sleep Timer: Playback paused") }
+        }
+    }
+
+    fun applyAudioPreset(presetIndex: Int, label: String) {
+        currentEqPresetIndex = presetIndex
+        currentEqPresetLabel = label
+        val sessionId = playerRef?.audioSessionId ?: return
+        bindAudioEffectsForSession(sessionId)
+    }
+
+    private fun bindAudioEffectsForSession(sessionId: Int) {
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId <= 0) return
+        try {
+            if (boundAudioSessionId != sessionId) {
+                runCatching { equalizer?.release() }
+                runCatching { bassBoost?.release() }
+                equalizer = null
+                bassBoost = null
+                boundAudioSessionId = sessionId
+            }
+            if (equalizer == null) {
+                equalizer = Equalizer(0, sessionId).apply { enabled = true }
+            }
+            if (bassBoost == null) {
+                bassBoost = BassBoost(0, sessionId).apply { enabled = true }
+            }
+            val eq = equalizer ?: return
+            val bb = bassBoost
+            when (currentEqPresetIndex) {
+                0 -> { // Flat
+                    if (eq.numberOfPresets > 0) eq.usePreset(0)
+                    bb?.setStrength(0.toShort())
+                }
+                1 -> { // Bass Boost
+                    bb?.setStrength(800.toShort())
+                }
+                2 -> { // Vocal / Acoustic
+                    val n = eq.numberOfPresets.toInt()
+                    if (n > 1) eq.usePreset((1 % n).toShort())
+                    bb?.setStrength(250.toShort())
+                }
+                3 -> { // Electronic / Club
+                    val n = eq.numberOfPresets.toInt()
+                    if (n > 2) eq.usePreset((2 % n).toShort())
+                    bb?.setStrength(650.toShort())
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun resetVolumeImmediate() {
+        crossfadeRampJob?.cancel()
+        playerRef?.volume = 1.0f
+    }
+
+    private fun startCrossfadeFadeIn(durationMs: Long) {
+        crossfadeRampJob?.cancel()
+        val p = playerRef ?: return
+        p.volume = 0.18f
+        crossfadeRampJob = scope.launch {
+            val steps = 14
+            val stepMs = (durationMs / steps).coerceIn(40L, 180L)
+            for (i in 1..steps) {
+                delay(stepMs)
+                if (mode != Mode.AUDIO) {
+                    p.volume = 1.0f
+                    return@launch
+                }
+                p.volume = (0.18f + (0.82f * i / steps)).coerceIn(0.18f, 1.0f)
+            }
+            p.volume = 1.0f
+        }
+    }
+
+    private fun startCrossfadeMonitor() {
+        crossfadeMonitorJob?.cancel()
+        lastCrossfadeMediaIndex = -1
+        crossfadeMonitorJob = scope.launch {
+            while (isActive && mode == Mode.AUDIO) {
+                delay(240L)
+                val p = playerRef ?: continue
+                val fadeSec = AppPrefs.crossfadeSeconds
+                if (fadeSec <= 0 || !AppPrefs.musicAutoplayNext) {
+                    if (crossfadeRampJob?.isActive != true && p.volume < 0.99f) {
+                        p.volume = 1.0f
+                    }
+                    continue
+                }
+                if (!p.isPlaying || crossfadeRampJob?.isActive == true) continue
+                val dur = p.duration
+                val pos = p.currentPosition
+                val fadeMs = fadeSec * 1000L
+                if (dur > fadeMs * 2 && pos >= dur - fadeMs && p.hasNextMediaItem()) {
+                    val remMs = (dur - pos).coerceAtLeast(0L)
+                    val ratio = (remMs.toFloat() / fadeMs.toFloat()).coerceIn(0.15f, 1.0f)
+                    p.volume = ratio
+                    if (remMs <= 300L && lastCrossfadeMediaIndex != p.currentMediaItemIndex) {
+                        lastCrossfadeMediaIndex = p.currentMediaItemIndex
+                        p.seekToNextMediaItem()
+                        startCrossfadeFadeIn(minOf(fadeMs, 2600L))
+                    }
+                } else if (p.volume < 0.99f) {
+                    p.volume = 1.0f
+                }
+            }
+        }
+    }
 
     @Volatile var mode: Mode = Mode.NONE
         private set
@@ -260,12 +383,21 @@ object PlaybackCenter {
     var catalog: StreamCatalog? = null
         private set
 
-    /** User selections that survive quality/track switches. */
+    /**
+     * Returns [catalog] ONLY when its `videoId` matches [currentEntry]'s `videoId`.
+     * Prevents stale catalogs from a previous song/video from ever being used for
+     * downloading or stream building when switching tracks.
+     */
+    fun catalogForCurrentEntry(): StreamCatalog? {
+        val entry = currentEntry ?: return null
+        val c = catalog ?: return null
+        val entryId = DownloadCenter.videoIdOf(entry.url)
+        return if (c.videoId.isNotBlank() && c.videoId == entryId) c else null
+    }
+
     var selectedAudioTrackId: String? = null
         private set
     private var selectedHeight: Int? = null
-
-    /** Set when the user explicitly picked "Auto" in the gear menu. */
     private var autoPicked = false
 
     val selectedQualityHeight: Int? get() = selectedHeight
@@ -284,17 +416,14 @@ object PlaybackCenter {
 
     val selectedAudioTrackLabel: String?
         get() = selectedAudioTrackId?.let { id ->
-            catalog?.audioTracks?.firstOrNull { it.id == id }?.label
+            catalogForCurrentEntry()?.audioTracks?.firstOrNull { it.id == id }?.label
         }
 
     val currentEntry: QueueEntry? get() = queue.getOrNull(queueIndex)
     val hasMedia: Boolean get() = currentEntry != null
 
-    /** Current playback speed in effect. */
     var playbackSpeed: Float = 1.0f
         private set
-
-    // ----- Lifecycle -----
 
     fun init(context: Context) {
         if (this::appContext.isInitialized) return
@@ -340,6 +469,12 @@ object PlaybackCenter {
             notify { it.onPlaybackStateChanged(isPlaying) }
         }
 
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            if (currentEqPresetIndex != 0 || equalizer != null) {
+                bindAudioEffectsForSession(audioSessionId)
+            }
+        }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED && mode == Mode.VIDEO &&
                 (playlistMode || AppPrefs.videoAutoplayNext)
@@ -350,13 +485,25 @@ object PlaybackCenter {
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (mode != Mode.AUDIO) return
-            val index = playerRef?.currentMediaItemIndex ?: return
+            val p = playerRef ?: return
+            if (p.mediaItemCount == 0 || mediaItem == null) return
+            val index = p.currentMediaItemIndex
             if (index < 0 || index >= queue.size) return
             queueIndex = index
+            catalog = null
+            if (AppPrefs.crossfadeSeconds > 0 && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                startCrossfadeFadeIn(minOf(AppPrefs.crossfadeSeconds * 1000L, 2600L))
+            } else if (crossfadeRampJob?.isActive != true) {
+                p.volume = 1.0f
+            }
             currentEntry?.let { entry ->
                 notify { it.onItemChanged(entry) }
+                notify { it.onCatalogReady() }
                 if (!entry.url.startsWith("file://")) {
                     resolveCatalog(entry)
+                } else {
+                    resolveJob?.cancel()
+                    setResolving(false)
                 }
             }
             prefetchAhead()
@@ -385,6 +532,9 @@ object PlaybackCenter {
     private fun notify(block: (Listener) -> Unit) {
         val snapshot = listeners.toList()
         snapshot.forEach(block)
+        if (this::appContext.isInitialized) {
+            SparkTubeWidgetProvider.refreshAll(appContext)
+        }
     }
 
     private fun ensureService() {
@@ -408,20 +558,25 @@ object PlaybackCenter {
         }
     }
 
-    /** Kills the current playback instantly so sounds never overlap. */
     private fun stopPlayerNow() {
+        resolveJob?.cancel()
+        prefetchJob?.cancel()
+        watchdogJob?.cancel()
+        crossfadeMonitorJob?.cancel()
+        resetVolumeImmediate()
+        val prevMode = mode
+        mode = Mode.NONE
         playerRef?.run {
             stop()
             clearMediaItems()
         }
+        mode = prevMode
     }
 
-    // ----- Commands -----
-
-    /** Starts a video (watch page). Builds a YouTube-like autoplay queue. */
     fun playVideo(entry: QueueEntry, extraQueue: List<QueueEntry> = emptyList()) {
         initFromApp()
         stopPlayerNow()
+        catalog = null
         mode = Mode.VIDEO
         radioMode = false
         playlistMode = false
@@ -430,13 +585,11 @@ object PlaybackCenter {
         resolveCurrent()
     }
 
-    /**
-     * Plays a fixed video playlist starting at [startIndex].
-     */
     fun playPlaylist(entries: List<QueueEntry>, startIndex: Int = 0) {
         initFromApp()
         if (entries.isEmpty()) return
         stopPlayerNow()
+        catalog = null
         mode = Mode.VIDEO
         radioMode = false
         playlistMode = true
@@ -445,54 +598,57 @@ object PlaybackCenter {
         resolveCurrent()
     }
 
-    /**
-     * Starts a song (optionally as an endless radio of related tracks).
-     */
     fun playMusic(entry: QueueEntry, radio: Boolean) {
         playMusicQueue(listOf(entry), 0, allowRadio = radio)
     }
 
-    /**
-     * Starts a fixed music playlist (favorites, downloads, …).
-     */
     fun playMusicQueue(entries: List<QueueEntry>, startIndex: Int = 0, allowRadio: Boolean = false) {
         initFromApp()
         if (entries.isEmpty()) return
         val start = startIndex.coerceIn(0, entries.size - 1)
-        val playlist = if (start == 0) entries else entries.drop(start)
+        val playlist = if (allowRadio && start > 0) entries.drop(start) else entries
+        val initialIdx = if (allowRadio) 0 else start
+
         stopPlayerNow()
+        catalog = null
         mode = Mode.AUDIO
         radioMode = allowRadio
         playlistMode = false
         audioOnlyMode = false
         pendingMusic.clear()
-        setQueue(playlist, 0)
-        resolveJob?.cancel()
+        setQueue(playlist, initialIdx)
+        startCrossfadeMonitor()
+
+        val first = currentEntry ?: return
+        if (first.url.startsWith("file://")) {
+            setResolving(false)
+            startMusicPlaylistWithRelated()
+            ensureService()
+            notify { it.onItemChanged(currentEntry) }
+            notify { it.onCatalogReady() }
+            return
+        }
+
         setResolving(true)
         resolveJob = scope.launch {
             try {
-                val first = currentEntry ?: return@launch
-                if (first.url.startsWith("file://")) {
-                    catalog = null
-                    startMusicPlaylistWithRelated()
-                    ensureService()
-                    notify { it.onItemChanged(currentEntry) }
-                    notify { it.onCatalogReady() }
-                } else {
-                    val info = YtRepository.streamInfo(first.url)
-                    if (LiveFilter.isLive(info)) {
-                        throw LiveContentException()
-                    }
-                    catalog = StreamCatalog(info)
-                    LocalStore.addToMusicHistory(appContext, first.toVideoEntry())
-                    RecommendEngine.logPlay(appContext, first.url, first.title, first.uploader)
-                    primeMusicUri(first)
-                    startMusicPlaylistWithRelated()
-                    ensureService()
-                    notify { it.onItemChanged(currentEntry) }
-                    notify { it.onCatalogReady() }
-                    prefetchAhead()
+                val info = YtRepository.streamInfo(first.url)
+                if (LiveFilter.isLive(info)) {
+                    throw LiveContentException()
                 }
+                if (currentEntry?.url != first.url) return@launch
+                val resolvedCatalog = StreamCatalog(info, first.url)
+                catalog = resolvedCatalog
+                LocalStore.addToMusicHistory(appContext, first.toVideoEntry())
+                RecommendEngine.logPlay(appContext, first.url, first.title, first.uploader)
+                primeMusicUri(first, resolvedCatalog)
+                startMusicPlaylistWithRelated()
+                ensureService()
+                notify { it.onItemChanged(currentEntry) }
+                notify { it.onCatalogReady() }
+                prefetchAhead()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (e is LiveContentException) {
                     notify { it.onLiveContentBlocked() }
@@ -505,13 +661,64 @@ object PlaybackCenter {
         }
     }
 
+    /** Reorders an item in the active queue (used by QueueSheet drag-and-drop). */
+    fun moveQueueItem(from: Int, to: Int) {
+        if (from !in queue.indices || to !in queue.indices || from == to) return
+        val item = queue.removeAt(from)
+        queue.add(to, item)
+        queueIndex = when (queueIndex) {
+            from -> to
+            in (from + 1)..to -> queueIndex - 1
+            in to until from -> queueIndex + 1
+            else -> queueIndex
+        }
+        if (mode == Mode.AUDIO) {
+            playerRef?.let { p ->
+                if (from < p.mediaItemCount && to < p.mediaItemCount) {
+                    p.moveMediaItem(from, to)
+                }
+            }
+        }
+        notify { it.onQueueChanged() }
+    }
+
+    /** Removes a non-current item from the active queue (used by QueueSheet swipe-to-remove). */
+    fun removeQueueItem(index: Int) {
+        if (index !in queue.indices || index == queueIndex) return
+        queue.removeAt(index)
+        if (index < queueIndex) {
+            queueIndex--
+        }
+        if (mode == Mode.AUDIO) {
+            playerRef?.let { p ->
+                if (index < p.mediaItemCount) {
+                    p.removeMediaItem(index)
+                }
+            }
+        }
+        notify { it.onQueueChanged() }
+    }
+
     fun playQueueIndex(index: Int) {
         if (index < 0 || index >= queue.size) return
+        resetVolumeImmediate()
         when (mode) {
             Mode.AUDIO -> playerRef?.let { p ->
                 if (index < p.mediaItemCount) {
+                    queueIndex = index
+                    catalog = null
                     p.seekTo(index, 0L)
                     p.playWhenReady = true
+                    currentEntry?.let { entry ->
+                        notify { it.onItemChanged(entry) }
+                        notify { it.onCatalogReady() }
+                        if (!entry.url.startsWith("file://")) {
+                            resolveCatalog(entry)
+                        } else {
+                            resolveJob?.cancel()
+                            setResolving(false)
+                        }
+                    }
                 }
             }
             Mode.VIDEO -> {
@@ -532,6 +739,7 @@ object PlaybackCenter {
     }
 
     fun seekTo(positionMs: Long) {
+        resetVolumeImmediate()
         playerRef?.seekTo(positionMs.coerceIn(0, durationMs))
     }
 
@@ -545,12 +753,12 @@ object PlaybackCenter {
         playerRef?.setPlaybackSpeed(speed)
     }
 
-    /** Music settings: pause between songs instead of auto-advancing. */
     fun applyMusicAutoplay() {
         playerRef?.setPauseAtEndOfMediaItems(!AppPrefs.musicAutoplayNext)
     }
 
     fun next() {
+        resetVolumeImmediate()
         when (mode) {
             Mode.AUDIO -> playerRef?.run {
                 if (hasNextMediaItem()) seekToNextMediaItem()
@@ -564,6 +772,7 @@ object PlaybackCenter {
     }
 
     fun previous() {
+        resetVolumeImmediate()
         when (mode) {
             Mode.AUDIO -> playerRef?.run {
                 if (hasPreviousMediaItem()) seekToPreviousMediaItem()
@@ -582,12 +791,17 @@ object PlaybackCenter {
     fun stopPlayback() {
         resolveJob?.cancel()
         prefetchJob?.cancel()
+        sleepTimerJob?.cancel()
+        crossfadeMonitorJob?.cancel()
+        resetVolumeImmediate()
+        sleepTimerEndRealtimeMs = 0L
         pendingMusic.clear()
+        val prevMode = mode
+        mode = Mode.NONE
         playerRef?.run {
             stop()
             clearMediaItems()
         }
-        mode = Mode.NONE
         playlistMode = false
         queue.clear()
         queueIndex = -1
@@ -596,8 +810,6 @@ object PlaybackCenter {
         notify { it.onItemChanged(null) }
         notify { it.onPlaybackStateChanged(false) }
     }
-
-    // ----- Quality / track selection -----
 
     fun setVideoQuality(height: Int?) {
         if (height == -1) {
@@ -616,47 +828,89 @@ object PlaybackCenter {
     }
 
     fun setAudioTrack(trackId: String) {
-        if (catalog?.audioTracks?.none { it.id == trackId } == true) return
+        if (catalogForCurrentEntry()?.audioTracks?.none { it.id == trackId } == true) return
         selectedAudioTrackId = trackId
         usedFallback = false
         rebuildSource(keepPosition = true)
         notify { it.onCatalogReady() }
     }
 
-    /** Turns the current video into an audio-only background stream. */
     fun switchToAudioOnly() {
         audioOnlyMode = true
         rebuildSource(keepPosition = true)
         notify { it.onAudioOnlyChanged(true) }
     }
 
-    /** Rebuilds the full video source after background-audio mode. */
     fun switchBackToVideo() {
         if (mode != Mode.VIDEO) return
         audioOnlyMode = false
-        rebuildSource(keepPosition = true)
+        resetVolumeImmediate()
+        val entry = currentEntry ?: return
+        if (entry.url.startsWith("file://")) {
+            val local = DownloadCenter.recordsFor(appContext, entry.url)
+                .firstOrNull { it.status == DownloadCenter.STATUS_DONE }
+            if (local != null) {
+                val pos = positionMs
+                startLocalFiles(local, pos)
+            }
+        } else {
+            rebuildSource(keepPosition = true)
+        }
         notify { it.onAudioOnlyChanged(false) }
     }
 
-    // ----- Seamless Dual Upper-Left Audio <-> Video Mode Switching -----
-
-    /**
-     * Switches from the Video Player (PlayerActivity) directly into the Apple Music
-     * Audio Player (NowPlayingActivity) while preserving the current playback position.
-     */
     fun switchToAudioPlayerMode() {
         initFromApp()
         val entry = currentEntry ?: return
         val savedPos = positionMs
         val wasPlaying = playerRef?.isPlaying ?: true
-        val existingCatalog = catalog
+        val existingCatalog = catalogForCurrentEntry()
 
         watchdogJob?.cancel()
+        resetVolumeImmediate()
         mode = Mode.AUDIO
         audioOnlyMode = true
+        startCrossfadeMonitor()
+
+        // Offline local file (or AV pair): switch to audio player at exact timestamp
+        if (entry.url.startsWith("file://")) {
+            val local = DownloadCenter.recordsFor(appContext, entry.url)
+                .firstOrNull { it.status == DownloadCenter.STATUS_DONE }
+            val audioPath = when {
+                local != null && local.type == DownloadCenter.TYPE_AV && local.filePaths.size >= 2 ->
+                    local.filePaths.last()
+                local != null && local.filePaths.isNotEmpty() ->
+                    local.filePaths.first()
+                else -> entry.url.removePrefix("file://")
+            }
+            val file = File(audioPath)
+            if (file.exists()) {
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(entry.title)
+                    .setArtist(entry.uploader)
+                    .setArtworkUri(entry.thumbnailUrl.takeIf { it.isNotBlank() }?.let(Uri::parse))
+                    .build()
+                val item = MediaItem.Builder()
+                    .setMediaId(entry.url)
+                    .setUri(Uri.fromFile(file))
+                    .setMediaMetadata(metadata)
+                    .build()
+                player.run {
+                    volume = 1.0f
+                    setMediaItems(listOf(item), 0, savedPos)
+                    prepare()
+                    playWhenReady = wasPlaying
+                    setPlaybackSpeed(playbackSpeed)
+                }
+                ensureService()
+                notify { it.onAudioOnlyChanged(true) }
+                notify { it.onItemChanged(entry) }
+                return
+            }
+        }
 
         if (existingCatalog != null) {
-            primeMusicUri(entry)
+            primeMusicUri(entry, existingCatalog)
             val source = buildSource(entry, existingCatalog)
             if (source != null) {
                 player.run {
@@ -671,25 +925,33 @@ object PlaybackCenter {
                 return
             }
         }
-        // Fallback if catalog wasn't resolved yet
         playMusic(entry.copy(isMusic = true), radio = true)
     }
 
-    /**
-     * Switches from the Audio Player (NowPlayingActivity) directly into the Video Player
-     * (PlayerActivity) while preserving the exact playback position.
-     */
     fun switchToVideoPlayerMode() {
         initFromApp()
         val entry = currentEntry ?: return
         val savedPos = positionMs
         val wasPlaying = playerRef?.isPlaying ?: true
-        val existingCatalog = catalog
+        val existingCatalog = catalogForCurrentEntry()
 
+        crossfadeMonitorJob?.cancel()
+        resetVolumeImmediate()
         mode = Mode.VIDEO
         audioOnlyMode = false
         radioMode = false
         if (selectedHeight == -1) selectedHeight = null
+
+        // Check if we have a local video/AV download for this item
+        val localVid = localVideoRecord(entry.url)
+        if (localVid != null && startLocalFiles(localVid, savedPos)) {
+            player.playWhenReady = wasPlaying
+            ensureService()
+            notify { it.onAudioOnlyChanged(false) }
+            notify { it.onItemChanged(entry) }
+            notify { it.onCatalogReady() }
+            return
+        }
 
         if (existingCatalog != null && existingCatalog.hasVideo) {
             val source = buildSource(entry, existingCatalog)
@@ -709,11 +971,20 @@ object PlaybackCenter {
                 return
             }
         }
-        // Fallback: resolve full video stream if catalog was missing
-        playVideo(entry.copy(isMusic = false))
-    }
 
-    // ----- Favorites -----
+        // If switching from an offline audio file to Video mode and no local video file exists,
+        // reconstruct the online YouTube URL from DownloadRecord.sourceUrl or videoId
+        val targetUrl = if (entry.url.startsWith("file://")) {
+            val rec = DownloadCenter.recordsFor(appContext, entry.url).firstOrNull()
+            rec?.sourceUrl?.takeIf { it.startsWith("http") }
+                ?: DownloadCenter.videoIdOf(entry.url).takeIf { it.isNotBlank() }
+                    ?.let { "https://www.youtube.com/watch?v=$it" }
+                ?: entry.url
+        } else {
+            entry.url
+        }
+        playVideo(entry.copy(url = targetUrl, isMusic = false))
+    }
 
     fun toggleFavoriteCurrent(): Boolean {
         val entry = currentEntry ?: return false
@@ -727,52 +998,84 @@ object PlaybackCenter {
         return LocalStore.isFavorite(appContext, entry.url)
     }
 
-    // ----- Local downloads -----
-
     fun playDownload(record: DownloadRecord) {
         initFromApp()
         if (record.filePaths.isEmpty()) return
-        mode = if (record.type == DownloadCenter.TYPE_AUDIO) Mode.AUDIO else Mode.VIDEO
-        audioOnlyMode = record.type == DownloadCenter.TYPE_AUDIO
+        if (record.status != DownloadCenter.STATUS_DONE) {
+            notify { it.onNotice("Download is still in progress") }
+            return
+        }
+        val validFiles = record.filePaths.filter { p -> File(p).let { it.exists() && it.length() > 0L } }
+        if (validFiles.isEmpty()) {
+            notify { it.onError("Downloaded file is missing") }
+            return
+        }
+
+        if (record.type == DownloadCenter.TYPE_AUDIO) {
+            val audioEntry = QueueEntry(
+                url = "file://${validFiles.first()}",
+                title = record.title,
+                uploader = record.uploader,
+                thumbnailUrl = record.thumbnailUrl,
+                durationSec = record.durationSec,
+                isMusic = true
+            )
+            playMusicQueue(listOf(audioEntry), 0, allowRadio = false)
+            return
+        }
+
+        stopPlayerNow()
+        catalog = null
+        mode = Mode.VIDEO
+        audioOnlyMode = false
         radioMode = false
         playlistMode = false
         pendingMusic.clear()
         queue.clear()
         queue.add(
             QueueEntry(
-                url = "file://" + record.filePaths.first(),
+                url = "file://${validFiles.first()}",
                 title = record.title,
                 uploader = record.uploader,
                 thumbnailUrl = record.thumbnailUrl,
-                durationSec = 0L,
-                isMusic = record.type == DownloadCenter.TYPE_AUDIO
+                durationSec = record.durationSec,
+                isMusic = false
             )
         )
         queueIndex = 0
         notify { it.onQueueChanged() }
         notify { it.onItemChanged(currentEntry) }
 
-        if (!startLocalFiles(record)) {
+        if (!startLocalFiles(record, 0L)) {
             notify { it.onError("Downloaded file is missing") }
             return
         }
-        catalog = null
+        setResolving(false)
         notify { it.onCatalogReady() }
         ensureService()
     }
 
-    private fun startLocalFiles(record: DownloadRecord): Boolean {
+    private fun startLocalFiles(record: DownloadRecord, startPositionMs: Long = 0L): Boolean {
+        val entry = currentEntry
+        val metadata = MediaMetadata.Builder()
+            .setTitle(entry?.title ?: record.title)
+            .setArtist(entry?.uploader ?: record.uploader)
+            .setArtworkUri((entry?.thumbnailUrl ?: record.thumbnailUrl).takeIf { it.isNotBlank() }?.let(Uri::parse))
+            .build()
         val sources = record.filePaths
-            .filter { File(it).exists() }
-            .map { path ->
-                progressiveSource(
-                    MediaItem.Builder().setUri(Uri.fromFile(File(path))).build()
-                )
+            .filter { p -> File(p).let { it.exists() && it.length() > 0L } }
+            .mapIndexed { idx, path ->
+                val itemBuilder = MediaItem.Builder()
+                    .setMediaId("file://$path")
+                    .setUri(Uri.fromFile(File(path)))
+                if (idx == 0) itemBuilder.setMediaMetadata(metadata)
+                progressiveSource(itemBuilder.build())
             }
         if (sources.isEmpty()) return false
         val source = if (sources.size == 1) sources[0] else MergingMediaSource(*sources.toTypedArray())
         player.run {
-            setMediaSource(source, 0L)
+            volume = 1.0f
+            setMediaSource(source, startPositionMs.coerceAtLeast(0L))
             prepare()
             playWhenReady = true
             setPlaybackSpeed(playbackSpeed)
@@ -785,15 +1088,21 @@ object PlaybackCenter {
             record.status == DownloadCenter.STATUS_DONE &&
                 record.type != DownloadCenter.TYPE_AUDIO &&
                 record.filePaths.isNotEmpty() &&
-                record.filePaths.all { File(it).exists() }
+                record.filePaths.all { p -> File(p).let { it.exists() && it.length() > 0L } }
         }
 
-    // ----- Resolution -----
+    private fun localAudioRecord(url: String): DownloadRecord? =
+        DownloadCenter.recordsFor(appContext, url).firstOrNull { record ->
+            record.status == DownloadCenter.STATUS_DONE &&
+                record.type == DownloadCenter.TYPE_AUDIO &&
+                record.filePaths.isNotEmpty() &&
+                record.filePaths.all { p -> File(p).let { it.exists() && it.length() > 0L } }
+        }
 
     private fun setQueue(newQueue: List<QueueEntry>, startIndex: Int) {
         queue.clear()
         queue.addAll(newQueue)
-        queueIndex = startIndex
+        queueIndex = startIndex.coerceIn(0, (newQueue.size - 1).coerceAtLeast(0))
         notify { it.onQueueChanged() }
         notify { it.onItemChanged(currentEntry) }
     }
@@ -803,7 +1112,6 @@ object PlaybackCenter {
         throw IllegalStateException("PlaybackCenter.init(context) must be called in Application.onCreate()")
     }
 
-    /** Video mode: resolve the current item and play it. */
     private fun resolveCurrent() {
         val entry = currentEntry ?: return
         resolveJob?.cancel()
@@ -813,21 +1121,70 @@ object PlaybackCenter {
         dashActive = false
         catalog = null
         notify { it.onItemChanged(currentEntry) }
-        setResolving(true)
-        resolveJob = scope.launch {
-            try {
-                val local = if (playlistMode) localVideoRecord(entry.url) else null
-                if (local != null && startLocalFiles(local)) {
+
+        // Handle local file:// URLs or already-downloaded offline videos first
+        val local = localVideoRecord(entry.url)
+            ?: if (entry.url.startsWith("file://")) {
+                DownloadCenter.recordsFor(appContext, entry.url)
+                    .firstOrNull { it.status == DownloadCenter.STATUS_DONE }
+            } else null
+
+        if (entry.url.startsWith("file://")) {
+            setResolving(false)
+            if (local != null && startLocalFiles(local, 0L)) {
+                notify { it.onItemChanged(currentEntry) }
+                notify { it.onCatalogReady() }
+                ensureService()
+            } else {
+                val directFile = File(entry.url.removePrefix("file://"))
+                if (directFile.exists() && directFile.length() > 0L) {
+                    val tempRecord = DownloadRecord(
+                        videoId = DownloadCenter.videoIdOf(entry.url),
+                        title = entry.title,
+                        uploader = entry.uploader,
+                        thumbnailUrl = entry.thumbnailUrl,
+                        type = DownloadCenter.TYPE_VIDEO,
+                        quality = "Offline",
+                        status = DownloadCenter.STATUS_DONE,
+                        filePaths = listOf(directFile.absolutePath),
+                        downloadIds = emptyList(),
+                        durationSec = entry.durationSec
+                    )
+                    startLocalFiles(tempRecord, 0L)
                     notify { it.onItemChanged(currentEntry) }
                     notify { it.onCatalogReady() }
                     ensureService()
+                } else {
+                    notify { it.onError("Downloaded file is missing") }
+                }
+            }
+            return
+        }
+
+        setResolving(true)
+        resolveJob = scope.launch {
+            try {
+                if (local != null && startLocalFiles(local, 0L)) {
+                    setResolving(false)
+                    notify { it.onItemChanged(currentEntry) }
+                    notify { it.onCatalogReady() }
+                    ensureService()
+                    // Best-effort catalog fetch in background if online
+                    runCatching {
+                        val info = YtRepository.streamInfo(entry.url)
+                        if (currentEntry?.url == entry.url && !LiveFilter.isLive(info)) {
+                            catalog = StreamCatalog(info, entry.url)
+                            notify { it.onCatalogReady() }
+                        }
+                    }
                     return@launch
                 }
                 val info = YtRepository.streamInfo(entry.url)
                 if (LiveFilter.isLive(info)) {
                     throw LiveContentException()
                 }
-                catalog = StreamCatalog(info)
+                if (currentEntry?.url != entry.url) return@launch
+                catalog = StreamCatalog(info, entry.url)
                 usedFallback = false
                 LocalStore.addToHistory(appContext, entry.toVideoEntry())
                 RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
@@ -867,9 +1224,14 @@ object PlaybackCenter {
         return true
     }
 
-    /** Music mode: resolve metadata for the current song (downloads, radio). */
     private fun resolveCatalog(entry: QueueEntry) {
         resolveJob?.cancel()
+        catalog = null
+        if (entry.url.startsWith("file://")) {
+            setResolving(false)
+            notify { it.onCatalogReady() }
+            return
+        }
         setResolving(true)
         resolveJob = scope.launch {
             try {
@@ -877,15 +1239,19 @@ object PlaybackCenter {
                 if (LiveFilter.isLive(info)) {
                     throw LiveContentException()
                 }
-                catalog = StreamCatalog(info)
+                if (currentEntry?.url != entry.url) return@launch
+                val resolvedCatalog = StreamCatalog(info, entry.url)
+                catalog = resolvedCatalog
                 LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
                 RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
-                primeMusicUri(entry)
+                primeMusicUri(entry, resolvedCatalog)
                 notify { it.onItemChanged(currentEntry) }
                 notify { it.onCatalogReady() }
                 if (radioMode) {
                     extendRadioFromRelated()
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (e is LiveContentException) {
                     notify { it.onLiveContentBlocked() }
@@ -900,7 +1266,7 @@ object PlaybackCenter {
 
     private fun extendQueueFromRelated() {
         if (playlistMode) return
-        val rel = catalog?.related ?: return
+        val rel = catalogForCurrentEntry()?.related ?: return
         val known = queue.map { it.url }.toSet()
         val additions = rel.filter { it.url !in known }.take(20)
             .map { it.toQueueEntry(isMusic = mode == Mode.AUDIO) }
@@ -909,13 +1275,14 @@ object PlaybackCenter {
         notify { it.onQueueChanged() }
     }
 
+    /** Strict Music-Only radio extension: filters out any non-music items via `LiveFilter.isMusicTrack`. */
     private fun extendRadioFromRelated() {
-        val rel = catalog?.related ?: return
+        val rel = catalogForCurrentEntry()?.related ?: return
         val idx = playerRef?.currentMediaItemIndex ?: queueIndex
         val remaining = (queue.size - idx - 1).coerceAtLeast(0)
         if (remaining >= RADIO_REFILL_BELOW) return
         val known = queue.map { it.url }.toSet()
-        val additions = rel.filter { it.url.isNotBlank() && it.url !in known && !LiveFilter.isLive(it) }
+        val additions = rel.filter { it.url.isNotBlank() && it.url !in known && LiveFilter.isMusicTrack(it) }
             .take(RADIO_BATCH)
             .map { it.toQueueEntry(isMusic = true) }
         appendRadioEntries(additions)
@@ -944,7 +1311,7 @@ object PlaybackCenter {
                 if (!radioMode || currentEntry?.url != seed.url) return@launch
                 val known = queue.map { it.url }.toSet()
                 val more = result.items
-                    .filter { it.url.isNotBlank() && it.url !in known && !LiveFilter.isLive(it) }
+                    .filter { it.url.isNotBlank() && it.url !in known && LiveFilter.isMusicTrack(it) }
                     .take(RADIO_BATCH)
                     .map { it.toQueueEntry(isMusic = true) }
                 appendRadioEntries(more)
@@ -969,16 +1336,27 @@ object PlaybackCenter {
             else notify { it.onError("Playback error: ${error.errorCodeName}") }
         }
         if (mode == Mode.AUDIO) {
+            val isOfflineItem = currentEntry?.url?.startsWith("file://") == true
+            if (isOfflineItem) {
+                notify { it.onNotice("Downloaded audio file could not be played") }
+            }
             playerRef?.run {
                 if (hasNextMediaItem()) {
                     seekToNextMediaItem()
+                    val newIdx = currentMediaItemIndex
+                    if (newIdx in queue.indices) {
+                        queueIndex = newIdx
+                        catalog = null
+                        notify { it.onItemChanged(currentEntry) }
+                        notify { it.onCatalogReady() }
+                    }
                     return
                 }
             }
             notifyFailure()
             return
         }
-        val c = catalog ?: run {
+        val c = catalogForCurrentEntry() ?: run {
             if (!skipBrokenPlaylistItem()) {
                 notifyFailure()
             }
@@ -1014,13 +1392,14 @@ object PlaybackCenter {
 
     private fun applySources(speed: Float) {
         val entry = currentEntry ?: return
-        val c = catalog ?: return
+        val c = catalogForCurrentEntry() ?: return
         val source = buildSource(entry, c) ?: run {
             notify { it.onError("No playable streams found") }
             return
         }
         sourceAppliedAt = SystemClock.elapsedRealtime()
         player.run {
+            volume = 1.0f
             setMediaSource(source, 0L)
             prepare()
             playWhenReady = true
@@ -1085,7 +1464,7 @@ object PlaybackCenter {
 
     private fun downshiftOneTier(keepPosition: Boolean): Boolean {
         if (watchdogDownshifts >= 2) return false
-        val c = catalog ?: return false
+        val c = catalogForCurrentEntry() ?: return false
         val current = effectiveSelectedHeight(c) ?: run {
             c.videoOnly.firstOrNull()?.effectiveHeight() ?: c.muxed.firstOrNull()?.effectiveHeight()
         } ?: return false
@@ -1106,12 +1485,13 @@ object PlaybackCenter {
 
     private fun rebuildSource(keepPosition: Boolean) {
         val entry = currentEntry ?: return
-        val c = catalog ?: return
+        val c = catalogForCurrentEntry() ?: return
         val position = if (keepPosition) positionMs else 0L
         val wasPlaying = playerRef?.isPlaying ?: true
         val source = buildSource(entry, c) ?: return
         sourceAppliedAt = SystemClock.elapsedRealtime()
         player.run {
+            volume = 1.0f
             setMediaSource(source, position)
             prepare()
             if (wasPlaying || !keepPosition) playWhenReady = true
@@ -1126,7 +1506,6 @@ object PlaybackCenter {
             .setArtworkUri(entry.thumbnailUrl.takeIf { it.isNotBlank() }?.let(Uri::parse))
             .build()
 
-        // Music / audio-only background mode: pick the best audio stream.
         if (mode == Mode.AUDIO || audioOnlyMode) {
             val audio = if (mode == Mode.AUDIO) {
                 pickMusicAudio(c)
@@ -1224,8 +1603,14 @@ object PlaybackCenter {
 
     private fun pickMusicAudio(c: StreamCatalog): AudioStream? {
         val group = c.audioTracks.firstOrNull() ?: return null
-        val streams = group.streams.filter { it.isUrl && it.averageBitrate > 0 }
-        if (streams.isEmpty()) return group.best
+        val allStreams = group.streams.filter { it.isUrl && it.averageBitrate > 0 }
+        if (allStreams.isEmpty()) return group.best
+        // Prefer M4A/MP4 AAC streams when available for universal container seek compatibility
+        val m4aStreams = allStreams.filter {
+            it.format?.mimeType?.contains("mp4", ignoreCase = true) == true ||
+                it.format?.suffix.equals("m4a", ignoreCase = true)
+        }
+        val streams = m4aStreams.ifEmpty { allStreams }
         return when (AppPrefs.musicAudioQuality) {
             AppPrefs.AUDIO_QUALITY_LOW -> streams.last()
             AppPrefs.AUDIO_QUALITY_MEDIUM -> streams[streams.size / 2]
@@ -1239,14 +1624,17 @@ object PlaybackCenter {
     private fun progressiveSource(item: MediaItem): MediaSource =
         ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(item)
 
-    // ----- Music playlist -----
-
+    /** Strict Music-Only radio startup: only appends related items that pass `LiveFilter.isMusicTrack`. */
     private fun startMusicPlaylistWithRelated() {
         val first = currentEntry ?: return
-        val items = mutableListOf(musicMediaItem(first))
+        val items: MutableList<MediaItem>
+        val startIdx: Int
+
         if (radioMode) {
-            catalog?.related
-                ?.filter { it.url.isNotBlank() && it.url != first.url && !LiveFilter.isLive(it) }
+            items = mutableListOf(musicMediaItem(first))
+            startIdx = 0
+            catalogForCurrentEntry()?.related
+                ?.filter { it.url.isNotBlank() && it.url != first.url && LiveFilter.isMusicTrack(it) }
                 ?.take(RADIO_FIRST_BATCH)
                 ?.forEach { rel ->
                     val qe = rel.toQueueEntry(isMusic = true)
@@ -1257,10 +1645,13 @@ object PlaybackCenter {
                 }
             notify { it.onQueueChanged() }
         } else {
-            queue.drop(1).forEach { items.add(musicMediaItem(it)) }
+            items = queue.map { musicMediaItem(it) }.toMutableList()
+            startIdx = queueIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
         }
+
         player.run {
-            setMediaItems(items, 0, 0L)
+            volume = 1.0f
+            setMediaItems(items, startIdx, 0L)
             prepare()
             playWhenReady = true
             setPlaybackSpeed(playbackSpeed)
@@ -1278,15 +1669,30 @@ object PlaybackCenter {
             .setArtworkUri(entry.thumbnailUrl.takeIf { it.isNotBlank() }?.let(Uri::parse))
             .build()
         if (entry.url.startsWith("file://")) {
+            val file = File(entry.url.removePrefix("file://"))
             return MediaItem.Builder()
-                .setUri(Uri.parse(entry.url))
+                .setMediaId(entry.url)
+                .setUri(Uri.fromFile(file))
                 .setMediaMetadata(metadata)
                 .build()
         }
+        // If this online track already has a completed offline audio download on disk, use it directly
+        val offlineAudio = localAudioRecord(entry.url)
+        if (offlineAudio != null) {
+            val localFile = File(offlineAudio.filePaths.first())
+            if (localFile.exists() && localFile.length() > 0L) {
+                return MediaItem.Builder()
+                    .setMediaId(entry.url)
+                    .setUri(Uri.fromFile(localFile))
+                    .setMediaMetadata(metadata)
+                    .build()
+            }
+        }
         val key = "music-${musicItemId.incrementAndGet()}"
-        if (pendingMusic.size > 128) pendingMusic.clear()
+        if (pendingMusic.size > 256) pendingMusic.clear()
         pendingMusic[key] = entry
         return MediaItem.Builder()
+            .setMediaId(entry.url)
             .setUri("sparktube://queue/$key")
             .setMediaMetadata(metadata)
             .build()
@@ -1300,7 +1706,8 @@ object PlaybackCenter {
         if (LiveFilter.isLive(info)) {
             throw LiveContentException()
         }
-        val audio = pickMusicAudio(StreamCatalog(info))
+        val c = StreamCatalog(info, entry.url)
+        val audio = pickMusicAudio(c)
             ?: throw IOException("No audio stream found")
         return cacheMusicUri(entry.url, audio.content)
     }
@@ -1312,8 +1719,10 @@ object PlaybackCenter {
         return uri
     }
 
-    private fun primeMusicUri(entry: QueueEntry) {
-        val best = catalog?.let { pickMusicAudio(it) } ?: return
+    private fun primeMusicUri(entry: QueueEntry, verifiedCatalog: StreamCatalog? = catalogForCurrentEntry()) {
+        val c = verifiedCatalog ?: return
+        if (c.videoId != DownloadCenter.videoIdOf(entry.url)) return
+        val best = pickMusicAudio(c) ?: return
         cacheMusicUri(entry.url, best.content)
     }
 
@@ -1329,8 +1738,11 @@ object PlaybackCenter {
             targets.forEach { entry ->
                 runCatching {
                     val info = YtRepository.streamInfo(entry.url)
-                    pickMusicAudio(StreamCatalog(info))?.let { audio ->
-                        cacheMusicUri(entry.url, audio.content)
+                    val c = StreamCatalog(info, entry.url)
+                    if (c.videoId == DownloadCenter.videoIdOf(entry.url)) {
+                        pickMusicAudio(c)?.let { audio ->
+                            cacheMusicUri(entry.url, audio.content)
+                        }
                     }
                 }
             }
@@ -1357,17 +1769,34 @@ object PlaybackCenter {
         DefaultDataSource.Factory(appContext, parallel)
     }
 
+    fun retryCurrent() {
+        val entry = currentEntry ?: return
+        YtRepository.invalidateStreamCache(entry.url)
+        YouTubePlayerUnlock.forceUnlockForUrl(entry.url)
+        musicUriCache.remove(entry.url)
+        when (mode) {
+            Mode.AUDIO -> playMusicQueue(queue.toList(), queueIndex.coerceAtLeast(0), allowRadio = radioMode)
+            Mode.VIDEO, Mode.NONE -> {
+                mode = Mode.VIDEO
+                resolveCurrent()
+            }
+        }
+    }
+
     private fun forceInitialRangeHeader(spec: DataSpec): DataSpec {
         val scheme = spec.uri.scheme
         if (scheme != "http" && scheme != "https") return spec
-        if (spec.position != 0L || spec.length != C.LENGTH_UNSET.toLong()) return spec
-        if (spec.httpRequestHeaders.containsKey("Range")) return spec
         val headers = HashMap(spec.httpRequestHeaders)
-        headers["Range"] = "bytes=0-"
+        YouTubeAuth.streamHeadersForUrl(spec.uri.toString()).forEach { (k, v) ->
+            if (!headers.containsKey(k)) {
+                headers[k] = v
+            }
+        }
+        if (spec.position == 0L && spec.length == C.LENGTH_UNSET.toLong() && !headers.containsKey("Range")) {
+            headers["Range"] = "bytes=0-"
+        }
         return spec.buildUpon().setHttpRequestHeaders(headers).build()
     }
-
-    // ----- View attach helpers -----
 
     @OptIn(UnstableApi::class)
     private class QueueForwardingPlayer(player: ExoPlayer) :
@@ -1429,6 +1858,13 @@ object PlaybackCenter {
         resolveJob?.cancel()
         prefetchJob?.cancel()
         watchdogJob?.cancel()
+        sleepTimerJob?.cancel()
+        crossfadeMonitorJob?.cancel()
+        crossfadeRampJob?.cancel()
+        runCatching { equalizer?.release() }
+        runCatching { bassBoost?.release() }
+        equalizer = null
+        bassBoost = null
         scope.cancel()
         forwardingPlayer = null
         forwardingFor = null

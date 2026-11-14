@@ -9,20 +9,19 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
 import com.sparktube.app.R
 import com.sparktube.app.data.ChannelEntry
 import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.ActivityChannelBinding
 import com.sparktube.app.ui.common.SkeletonAdapter
+import com.sparktube.app.ui.common.VideoAdapter
 import com.sparktube.app.ui.common.showSkeleton
 import com.sparktube.app.ui.common.toUiModel
-import com.sparktube.app.ui.common.VideoAdapter
 import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.util.Formatters
-import com.sparktube.app.util.Thumbs
 import com.sparktube.app.util.Themes
+import com.sparktube.app.util.Thumbs
 import kotlinx.coroutines.launch
 import org.schabi.newpipe.extractor.Page
 
@@ -161,6 +160,9 @@ class ChannelActivity : AppCompatActivity() {
         binding.subscribeButton.text = getString(if (subscribed) R.string.subscribed else R.string.subscribe)
         binding.subscribeButton.setBackgroundResource(
             if (subscribed) R.drawable.bg_subscribe_on else R.drawable.bg_subscribe_off
+        )
+        binding.subscribeButton.setTextColor(
+            getColor(if (subscribed) R.color.subscribe_on_text else R.color.white)
         )
     }
 

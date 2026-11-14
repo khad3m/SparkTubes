@@ -7,11 +7,14 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import com.sparktube.app.BuildConfig
 import com.sparktube.app.R
 import com.sparktube.app.databinding.ActivityMainBinding
 import com.sparktube.app.playback.PlaybackCenter
@@ -24,6 +27,8 @@ import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Themes
 import com.sparktube.app.util.Thumbs
+import com.sparktube.app.util.UpdateChecker
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -32,15 +37,15 @@ class MainActivity : AppCompatActivity() {
     private var selectedId: Int = R.id.navHome
     private val fragments = mutableMapOf<Int, Fragment>()
     private var lastBackPress = 0L
-    private var lastMiniThumb: String? = null
+    private var lastMiniThumbKey: String? = null
 
     private val progressHandler = Handler(Looper.getMainLooper())
 
     private val playbackListener = object : PlaybackCenter.Listener {
-        override fun onItemChanged(entry: com.sparktube.app.playback.QueueEntry?) = updateMiniPlayer()
+        override fun onItemChanged(entry: com.sparktube.app.playback.QueueEntry?) = bindMiniPlayer()
         override fun onPlaybackStateChanged(isPlaying: Boolean) = updateMiniPlayer()
         override fun onQueueChanged() = updateMiniPlayer()
-        override fun onAudioOnlyChanged(audioOnly: Boolean) = updateMiniPlayer()
+        override fun onAudioOnlyChanged(audioOnly: Boolean) = bindMiniPlayer()
         override fun onFavoriteChanged(url: String, isFavorite: Boolean) = updateMiniPlayer()
     }
 
@@ -60,6 +65,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestNotificationPermissionIfNeeded()
+        maybeSilentUpdateCheck()
 
         binding.navHome.setOnClickListener { select(R.id.navHome) }
         binding.navMusic.setOnClickListener { select(R.id.navMusic) }
@@ -79,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.miniPlayer.setOnClickListener {
             PlaybackCenter.currentEntry ?: return@setOnClickListener
-            if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO) {
+            if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO || PlaybackCenter.audioOnlyMode) {
                 NowPlayingActivity.start(this)
             } else {
                 PlayerActivity.startResume(this)
@@ -87,6 +93,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         applySelection()
+    }
+
+    /** Runs once per app session if "Auto check for updates" is enabled in Settings. */
+    private fun maybeSilentUpdateCheck() {
+        if (!AppPrefs.autoCheckUpdates || UpdateChecker.silentCheckDone) return
+        UpdateChecker.silentCheckDone = true
+        lifecycleScope.launch {
+            val latest = UpdateChecker.fetchLatest() ?: return@launch
+            if (isFinishing || isDestroyed) return@launch
+            if (UpdateChecker.isNewer(BuildConfig.VERSION_NAME, latest.tag)) {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("${getString(R.string.update_available_title)} (${latest.tag})")
+                    .setMessage(latest.body.ifBlank { latest.name })
+                    .setPositiveButton(R.string.update_download) { _, _ ->
+                        UpdateChecker.openDownload(this@MainActivity, latest)
+                    }
+                    .setNegativeButton(R.string.later, null)
+                    .show()
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -127,6 +153,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindMiniPlayer() {
+        if (isFinishing || isDestroyed) return
         val hasMedia = PlaybackCenter.hasMedia && !PlaybackCenter.inPip
         binding.miniPlayer.isVisible = hasMedia
         if (!hasMedia) {
@@ -166,8 +193,9 @@ class MainActivity : AppCompatActivity() {
         binding.miniTitle.text = entry.title
         binding.miniTitle.isSelected = true
         binding.miniSubtitle.text = entry.uploader
-        if (entry.thumbnailUrl != lastMiniThumb) {
-            lastMiniThumb = entry.thumbnailUrl
+        val thumbKey = "${entry.url}|${entry.thumbnailUrl}"
+        if (thumbKey != lastMiniThumbKey) {
+            lastMiniThumbKey = thumbKey
             Thumbs.load(binding.miniThumb, entry.thumbnailUrl)
         }
         binding.miniPlayPause.setImageResource(
@@ -177,7 +205,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun select(id: Int) {
         if (id == selectedId) {
-            // Tapping the active tab again scrolls it to the top
             (fragments[id] as? ScrollsToTop)?.scrollToTop()
             return
         }
@@ -195,8 +222,6 @@ class MainActivity : AppCompatActivity() {
                 R.anim.tab_enter, R.anim.tab_exit
             )
         }
-        // Music and Menu are detached when not visible (their views and bitmaps are freed);
-        // Home and Library keep their views so scroll position and feeds stay instant.
         fragments.forEach { (id, f) ->
             if (id == selectedId) return@forEach
             if (id in DETACH_WHEN_HIDDEN) {

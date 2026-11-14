@@ -24,7 +24,6 @@ import com.sparktube.app.ui.common.showSkeleton
 import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
 import com.sparktube.app.ui.common.VideoAdapter
-import com.sparktube.app.ui.menu.SettingsPageActivity
 import com.sparktube.app.ui.music.NowPlayingActivity
 import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.ui.search.SearchActivity
@@ -84,10 +83,6 @@ class HomeFragment : Fragment(), ScrollsToTop {
             startActivity(
                 SearchActivity.intent(requireContext(), music = false)
             )
-        }
-
-        binding.headerProfileChip.setOnClickListener {
-            SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)
         }
 
         setupCategoryChips()

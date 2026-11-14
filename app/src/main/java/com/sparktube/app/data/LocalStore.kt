@@ -21,7 +21,7 @@ data class ChannelEntry(
     val subscriberCount: Long
 )
 
-/** A finished or in-progress download tracked by the app. */
+/** A finished, paused, failed, or in-progress download tracked by the app. */
 data class DownloadRecord(
     val videoId: String,
     val title: String,
@@ -30,10 +30,17 @@ data class DownloadRecord(
     /** AUDIO | VIDEO | AV */
     val type: String,
     val quality: String,
+    /** PENDING | RUNNING | PAUSED | DONE | FAILED */
     val status: String,
     /** Local file paths (one for AUDIO/VIDEO, two for AV pairs). */
     val filePaths: List<String>,
-    val downloadIds: List<Long>
+    val downloadIds: List<Long>,
+    /** Original YouTube stream duration in seconds (for offline lists & queue). */
+    val durationSec: Long = 0L,
+    /** Original YouTube watch URL (for mode switching, retry re-extraction, sharing, and metadata). */
+    val sourceUrl: String = "",
+    /** Direct CDN stream URLs (one for AUDIO/VIDEO, two for AV) used for Pause/Resume/Retry. */
+    val streamUrls: List<String> = emptyList()
 )
 
 /** A user-created playlist with its saved videos (all local, account-free). */
@@ -117,9 +124,6 @@ object LocalStore {
     }
 
     // ----- Search history -----
-    //
-    // Video searches and music searches are kept in two separate lists so a
-    // song search never shows up in the video search screen (and vice versa).
 
     private fun searchKey(music: Boolean) = if (music) KEY_MUSIC_SEARCHES else KEY_SEARCHES
 
@@ -244,6 +248,20 @@ object LocalStore {
         writeDownloads(prefs(ctx), list)
     }
 
+    fun updateDownloadRecord(context: Context, updated: DownloadRecord) {
+        val ctx = context.applicationContext
+        val list = downloads(ctx).toMutableList()
+        val idx = list.indexOfFirst {
+            it.videoId == updated.videoId && it.type == updated.type && it.quality == updated.quality
+        }
+        if (idx >= 0) {
+            list[idx] = updated
+        } else {
+            list.add(0, updated)
+        }
+        writeDownloads(prefs(ctx), list)
+    }
+
     fun updateDownloadStatus(context: Context, downloadId: Long, status: String) {
         val ctx = context.applicationContext
         val list = downloads(ctx).toMutableList()
@@ -275,10 +293,6 @@ object LocalStore {
     fun playlist(context: Context, id: Long): Playlist? =
         playlists(context).firstOrNull { it.id == id }
 
-    /**
-     * Creates a playlist. @return the new playlist, or null when the name is
-     * empty or another playlist already uses it (case-insensitive).
-     */
     fun createPlaylist(context: Context, name: String): Playlist? {
         val clean = name.trim()
         if (clean.isEmpty()) return null
@@ -303,7 +317,6 @@ object LocalStore {
         writePlaylists(prefs(ctx), list)
     }
 
-    /** @return true when the video was added; false when it was already in. */
     fun addToPlaylist(context: Context, id: Long, entry: VideoEntry): Boolean {
         val ctx = context.applicationContext
         val list = playlists(ctx).toMutableList()
@@ -321,7 +334,6 @@ object LocalStore {
         return true
     }
 
-    /** @return true when a video was actually removed. */
     fun removeFromPlaylist(context: Context, id: Long, url: String): Boolean {
         val ctx = context.applicationContext
         val list = playlists(ctx).toMutableList()
@@ -484,8 +496,9 @@ object LocalStore {
             val arr = JSONArray(raw)
             (0 until arr.length()).mapNotNull { idx ->
                 val o = arr.getJSONObject(idx)
+                val vid = o.optString("videoId")
                 DownloadRecord(
-                    videoId = o.optString("videoId"),
+                    videoId = vid,
                     title = o.optString("title"),
                     uploader = o.optString("uploader"),
                     thumbnailUrl = o.optString("thumb"),
@@ -497,6 +510,13 @@ object LocalStore {
                     } ?: emptyList(),
                     downloadIds = o.optJSONArray("ids")?.let { ids ->
                         (0 until ids.length()).map { ids.optLong(it) }
+                    } ?: emptyList(),
+                    durationSec = o.optLong("duration", 0L),
+                    sourceUrl = o.optString("sourceUrl").ifBlank {
+                        if (vid.length == 11) "https://www.youtube.com/watch?v=$vid" else ""
+                    },
+                    streamUrls = o.optJSONArray("streamUrls")?.let { urls ->
+                        (0 until urls.length()).map { urls.optString(it) }
                     } ?: emptyList()
                 )
             }
@@ -519,6 +539,9 @@ object LocalStore {
                     .put("status", record.status)
                     .put("files", JSONArray(record.filePaths))
                     .put("ids", JSONArray(record.downloadIds))
+                    .put("duration", record.durationSec)
+                    .put("sourceUrl", record.sourceUrl)
+                    .put("streamUrls", JSONArray(record.streamUrls))
             )
         }
         sp.edit().putString(KEY_DOWNLOADS, arr.toString()).apply()
