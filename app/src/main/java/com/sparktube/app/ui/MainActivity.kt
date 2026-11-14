@@ -1,6 +1,5 @@
 package com.sparktube.app.ui
 
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -13,8 +12,6 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
-import com.sparktube.app.BuildConfig
 import com.sparktube.app.R
 import com.sparktube.app.databinding.ActivityMainBinding
 import com.sparktube.app.playback.PlaybackCenter
@@ -26,10 +23,7 @@ import com.sparktube.app.ui.music.NowPlayingActivity
 import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Themes
-import com.sparktube.app.util.UpdateChecker
 import com.sparktube.app.util.Thumbs
-import coil.load
-import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -38,18 +32,15 @@ class MainActivity : AppCompatActivity() {
     private var selectedId: Int = R.id.navHome
     private val fragments = mutableMapOf<Int, Fragment>()
     private var lastBackPress = 0L
+    private var lastMiniThumb: String? = null
 
     private val progressHandler = Handler(Looper.getMainLooper())
 
     private val playbackListener = object : PlaybackCenter.Listener {
         override fun onItemChanged(entry: com.sparktube.app.playback.QueueEntry?) = updateMiniPlayer()
-
         override fun onPlaybackStateChanged(isPlaying: Boolean) = updateMiniPlayer()
-
         override fun onQueueChanged() = updateMiniPlayer()
-
         override fun onAudioOnlyChanged(audioOnly: Boolean) = updateMiniPlayer()
-
         override fun onFavoriteChanged(url: String, isFavorite: Boolean) = updateMiniPlayer()
     }
 
@@ -61,7 +52,6 @@ class MainActivity : AppCompatActivity() {
 
         if (savedInstanceState != null) {
             selectedId = savedInstanceState.getInt(STATE_SELECTED, R.id.navHome)
-            // Re-attach fragments that survived a configuration change.
             NAV_IDS.forEach { id ->
                 supportFragmentManager.findFragmentByTag(tagOf(id))?.let {
                     fragments[id] = it
@@ -70,18 +60,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestNotificationPermissionIfNeeded()
-        silentlyCheckForUpdate()
 
         binding.navHome.setOnClickListener { select(R.id.navHome) }
         binding.navMusic.setOnClickListener { select(R.id.navMusic) }
         binding.navLibrary.setOnClickListener { select(R.id.navLibrary) }
         binding.navMenu.setOnClickListener { select(R.id.navMenu) }
 
-        // Rounded corners for the live video / artwork box of the mini player.
         binding.miniMedia.clipToOutline = true
         binding.miniMedia.outlineProvider = object : android.view.ViewOutlineProvider() {
             override fun getOutline(view: View, outline: android.graphics.Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, 12f * resources.displayMetrics.density)
+                outline.setRoundRect(0, 0, view.width, view.height, 10f * resources.displayMetrics.density)
             }
         }
 
@@ -90,7 +78,7 @@ class MainActivity : AppCompatActivity() {
             PlaybackCenter.stopPlayback()
         }
         binding.miniPlayer.setOnClickListener {
-            val entry = PlaybackCenter.currentEntry ?: return@setOnClickListener
+            PlaybackCenter.currentEntry ?: return@setOnClickListener
             if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO) {
                 NowPlayingActivity.start(this)
             } else {
@@ -108,7 +96,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // A theme / accent change while we were paused: re-style ourselves.
         if (Themes.recreateIfNeeded(this)) return
         PlaybackCenter.addListener(playbackListener)
         bindMiniPlayer()
@@ -118,7 +105,6 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
         PlaybackCenter.removeListener(playbackListener)
         progressHandler.removeCallbacksAndMessages(null)
-        // Hand the video surface over to whoever is coming on top.
         PlaybackCenter.detachView(binding.miniVideo)
     }
 
@@ -127,33 +113,6 @@ class MainActivity : AppCompatActivity() {
         PlaybackCenter.removeListener(playbackListener)
     }
 
-    /** Background update check on every app open; popup only when needed. */
-    private fun silentlyCheckForUpdate() {
-        if (BuildConfig.DEBUG) return
-        if (UpdateChecker.silentCheckDone) return
-        UpdateChecker.silentCheckDone = true
-        lifecycleScope.launch {
-            val release = UpdateChecker.fetchLatest() ?: return@launch
-            if (UpdateChecker.isNewer(BuildConfig.VERSION_NAME, release.tag)) {
-                val body = release.body.ifBlank {
-                    "Version ${release.tag.removePrefix("v")} is available."
-                }
-                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle(
-                        getString(R.string.update_available_title) +
-                            " · ${release.tag.removePrefix("v")}"
-                    )
-                    .setMessage(body)
-                    .setPositiveButton(R.string.update_download) { _, _ ->
-                        UpdateChecker.openDownload(this@MainActivity, release)
-                    }
-                    .setNegativeButton(R.string.later, null)
-                    .show()
-            }
-        }
-    }
-
-    /** Android 13+: media notification (background playback controls) needs this. */
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
@@ -167,15 +126,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        // Notification permission is optional: playback works either way.
-    }
-
     private fun bindMiniPlayer() {
         val hasMedia = PlaybackCenter.hasMedia && !PlaybackCenter.inPip
         binding.miniPlayer.isVisible = hasMedia
@@ -184,8 +134,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (PlaybackCenter.mode == PlaybackCenter.Mode.VIDEO && !PlaybackCenter.audioOnlyMode) {
-            // Live video surface in the mini player, like YouTube: a 16:9
-            // box that the picture fills completely (no black bars).
             setMiniMediaWidth(wide = true)
             binding.miniThumb.isVisible = false
             binding.miniVideo.isVisible = true
@@ -200,7 +148,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setMiniMediaWidth(wide: Boolean) {
-        val width = ((if (wide) 92 else 52) * resources.displayMetrics.density).toInt()
+        val width = ((if (wide) 92 else 48) * resources.displayMetrics.density).toInt()
         val lp = binding.miniMedia.layoutParams
         if (lp.width != width) {
             lp.width = width
@@ -218,7 +166,10 @@ class MainActivity : AppCompatActivity() {
         binding.miniTitle.text = entry.title
         binding.miniTitle.isSelected = true
         binding.miniSubtitle.text = entry.uploader
-        Thumbs.load(binding.miniThumb, entry.thumbnailUrl)
+        if (entry.thumbnailUrl != lastMiniThumb) {
+            lastMiniThumb = entry.thumbnailUrl
+            Thumbs.load(binding.miniThumb, entry.thumbnailUrl)
+        }
         binding.miniPlayPause.setImageResource(
             if (PlaybackCenter.isPlaying) R.drawable.ic_pause else R.drawable.ic_play_arrow
         )
@@ -233,18 +184,29 @@ class MainActivity : AppCompatActivity() {
     private fun applySelection() {
         val fm = supportFragmentManager
         val tx = fm.beginTransaction()
+        tx.setReorderingAllowed(true)
         if (AppPrefs.animations) {
-            // Gentle cross-fade + slide-up on the incoming tab.
             tx.setCustomAnimations(
                 R.anim.tab_enter, R.anim.tab_exit,
                 R.anim.tab_enter, R.anim.tab_exit
             )
         }
-        fragments.values.forEach { tx.hide(it) }
-        val target = fragments[selectedId] ?: createFragment(selectedId).also {
+        // Music and Menu are detached when not visible (their views and bitmaps are freed);
+        // Home and Library keep their views so scroll position and feeds stay instant.
+        fragments.forEach { (id, f) ->
+            if (id == selectedId) return@forEach
+            if (id in DETACH_WHEN_HIDDEN) {
+                if (!f.isDetached) tx.detach(f)
+            } else if (!f.isHidden) {
+                tx.hide(f)
+            }
+        }
+        val existing = fragments[selectedId]
+        val target = existing ?: createFragment(selectedId).also {
             fragments[selectedId] = it
             tx.add(R.id.container, it, tagOf(selectedId))
         }
+        if (existing != null && existing.isDetached) tx.attach(existing)
         tx.show(target)
         tx.commit()
 
@@ -280,6 +242,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val STATE_SELECTED = "selected_nav"
         private const val REQ_NOTIFICATIONS = 4711
+        private val DETACH_WHEN_HIDDEN = setOf(R.id.navMusic, R.id.navMenu)
         private val NAV_IDS = intArrayOf(R.id.navHome, R.id.navMusic, R.id.navLibrary, R.id.navMenu)
         private fun tagOf(id: Int) = "frag_$id"
     }

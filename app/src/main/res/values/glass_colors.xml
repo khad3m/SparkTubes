@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Glassmorphism surfaces (light theme): frosted white over the light background -->
+    <color name="glass_top">#D9FFFFFF</color>
+    <color name="glass_bottom">#8CFFFFFF</color>
+    <color name="glass_stroke">#1F000000</color>
+    <color name="glass_sheet">#F2FFFFFF</color>
+    <color name="yt_red">#FF0033</color>
+    <color name="yt_red_deep">#B3001F</color>
+</resources>

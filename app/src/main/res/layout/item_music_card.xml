@@ -8,28 +8,28 @@
     android:orientation="vertical">
 
     <FrameLayout
-        android:layout_width="150dp"
-        android:layout_height="150dp">
+        android:layout_width="156dp"
+        android:layout_height="156dp">
 
         <com.google.android.material.imageview.ShapeableImageView
             android:id="@+id/art"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:scaleType="centerCrop"
-            app:shapeAppearanceOverlay="@style/RoundedArt" />
+            app:shapeAppearanceOverlay="@style/RoundedThumb" />
 
-        <!-- Play badge: tells the card starts a song + radio. -->
+        <!-- Subtle Apple Music translucent play pill in bottom-right -->
         <FrameLayout
-            android:layout_width="34dp"
-            android:layout_height="34dp"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
             android:layout_gravity="end|bottom"
-            android:layout_margin="10dp"
+            android:layout_margin="8dp"
             android:background="@drawable/bg_play_badge"
-            android:elevation="4dp">
+            android:elevation="3dp">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
                 android:layout_gravity="center"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_play_arrow"
@@ -39,22 +39,23 @@
 
     <TextView
         android:id="@+id/title"
-        android:layout_width="150dp"
+        android:layout_width="156dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="9dp"
+        android:layout_marginTop="7dp"
         android:ellipsize="end"
-        android:maxLines="2"
+        android:letterSpacing="-0.01"
+        android:maxLines="1"
         android:textColor="@color/on_surface"
         android:textSize="14sp"
         android:textStyle="bold" />
 
     <TextView
         android:id="@+id/subtitle"
-        android:layout_width="150dp"
+        android:layout_width="156dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginTop="1dp"
         android:ellipsize="end"
         android:maxLines="1"
         android:textColor="@color/on_surface_variant"
-        android:textSize="12sp" />
+        android:textSize="13sp" />
 </LinearLayout>

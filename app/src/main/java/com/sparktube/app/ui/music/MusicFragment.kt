@@ -1,8 +1,10 @@
 package com.sparktube.app.ui.music
 
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -15,31 +17,37 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
-import coil.load
+import com.google.android.material.imageview.ShapeableImageView
 import com.sparktube.app.R
+import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.FragmentMusicBinding
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.ui.common.SkeletonPulse
+import com.sparktube.app.ui.common.VideoUiModel
 import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
-import com.sparktube.app.ui.common.VideoUiModel
 import com.sparktube.app.ui.search.SearchActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Formatters
+import com.sparktube.app.util.Themes
 import com.sparktube.app.util.Thumbs
 import kotlinx.coroutines.launch
 
 private data class Genre(val label: String, val query: String?, val top: Int, val bottom: Int)
 
 /**
- * Modern music home: time-of-day greeting, search field, quick access tiles
- * (favorites / downloads), a trending shelf of rounded art cards, colorful
- * genre tiles and a popular-songs list. Tapping a song opens the Now Playing
- * screen and starts a radio of related tracks (its queue is one tap away).
+ * Apple Music "Home / Listen Now" experience:
+ * - Large bold header with music super-label
+ * - Quick Library rows (Favorites & Downloaded)
+ * - "Top Picks for You" tall editorial cards with blurred footer caption
+ * - "Trending Now" 156dp rounded artwork shelf
+ * - "Top Songs" ranked chart rows with interactive ••• song action sheet
+ * - "Browse by Category" Apple Music vibrant gradient cards
  */
 class MusicFragment : Fragment() {
 
@@ -47,9 +55,9 @@ class MusicFragment : Fragment() {
     private val binding get() = _binding!!
 
     private var loadJob: kotlinx.coroutines.Job? = null
-
-    /** Pulse animators of the currently shown skeleton placeholders. */
     private var skeletonPulse: SkeletonPulse? = null
+    private var cachedModels: List<VideoUiModel> = emptyList()
+    private var loadedCountry: String? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -64,6 +72,11 @@ class MusicFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         binding.greeting.setText(greetingRes())
+        binding.errorRetry.setOnClickListener { load() }
+        Motion.pressable(binding.favoritesButton, 0.97f)
+        Motion.pressable(binding.downloadsButton, 0.97f)
+        Motion.pressable(binding.searchButton, 0.98f)
+        Motion.pressable(binding.profileBadge, 0.9f)
 
         binding.searchButton.setOnClickListener {
             startActivity(SearchActivity.intent(requireContext(), music = true))
@@ -74,16 +87,46 @@ class MusicFragment : Fragment() {
         binding.downloadsButton.setOnClickListener {
             MusicListActivity.start(requireContext(), favourites = false)
         }
+        binding.profileBadge.setOnClickListener {
+            if (PlaybackCenter.hasMedia) {
+                NowPlayingActivity.start(requireContext())
+            } else if (cachedModels.isNotEmpty()) {
+                playSong(cachedModels.first(), radio = true)
+            }
+        }
+        binding.playAllPopular.setOnClickListener {
+            if (cachedModels.isNotEmpty()) {
+                val entries = cachedModels.map { it.toQueueEntry(isMusic = true) }
+                PlaybackCenter.playMusicQueue(entries, 0)
+                NowPlayingActivity.start(requireContext())
+            }
+        }
 
         buildGenreTiles()
-        load()
+        // Tab views are destroyed when the tab is not visible (saves RAM); rebuild from cache, no network.
+        if (cachedModels.isNotEmpty() && loadedCountry == AppPrefs.countryOrDefault) {
+            bindTrending(binding, cachedModels)
+        } else {
+            load()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        if (binding.shelfRow.childCount == 0) {
-            load()
-        }
+        refreshIfNeeded()
+    }
+
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden) refreshIfNeeded()
+    }
+
+    /** Reload when the country changed in Menu, or when a previous load left the shelf empty. */
+    private fun refreshIfNeeded() {
+        if (_binding == null || isHidden) return
+        val stale = loadedCountry != null && loadedCountry != AppPrefs.countryOrDefault
+        val empty = binding.shelfRow.childCount == 0
+        if (stale || (empty && loadJob?.isActive != true)) load()
     }
 
     private fun greetingRes(): Int {
@@ -103,21 +146,19 @@ class MusicFragment : Fragment() {
 
     private fun load() {
         loadJob?.cancel()
-        // Same as HomeFragment: work on a captured binding reference so a
-        // theme-change relaunch (view destroyed mid-coroutine) cannot NPE.
         val b = _binding ?: return
         loadJob = viewLifecycleOwner.lifecycleScope.launch {
             b.errorView.isVisible = false
-            // Skeleton placeholders instead of a spinner: the trending shelf
-            // and the popular list keep their shape while data loads.
             showMusicSkeleton(b)
             try {
-                val result = YtRepository.musicTrending(AppPrefs.countryOrDefault)
+                val country = AppPrefs.countryOrDefault
+                val result = YtRepository.musicTrending(country)
                 val models = result.items.map { it.toUiModel() }
+                cachedModels = models
+                loadedCountry = country
                 clearMusicSkeleton(b)
                 bindTrending(b, models)
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // A newer load() cancelled this one: not an error.
                 throw e
             } catch (e: Exception) {
                 clearMusicSkeleton(b)
@@ -127,7 +168,6 @@ class MusicFragment : Fragment() {
         }
     }
 
-    /** Fills the shelf + popular list with pulsing placeholder cards. */
     private fun showMusicSkeleton(b: FragmentMusicBinding) {
         clearMusicSkeleton(b)
         b.shelfTitle.isVisible = true
@@ -147,40 +187,204 @@ class MusicFragment : Fragment() {
         }
     }
 
-    /** Stops the placeholder pulse; real binders clear the views themselves. */
     private fun clearMusicSkeleton(b: FragmentMusicBinding) {
         skeletonPulse?.cancel()
         skeletonPulse = null
+        b.topPicksRow.removeAllViews()
         b.shelfRow.removeAllViews()
         b.popularList.removeAllViews()
     }
 
     private fun bindTrending(b: FragmentMusicBinding, models: List<VideoUiModel>) {
-        // --- Trending shelf (square art cards) ---
-        b.shelfTitle.isVisible = models.isNotEmpty()
-        b.shelfScroller.isVisible = models.isNotEmpty()
+        val hasItems = models.isNotEmpty()
+        b.topPicksTitle.isVisible = hasItems
+        b.topPicksScroller.isVisible = hasItems
+        b.shelfTitle.isVisible = hasItems
+        b.shelfScroller.isVisible = hasItems
+        b.popularTitle.isVisible = hasItems
+
+        // 1. Apple Music "Top Picks for You" Editorial Cards (first 4 items)
+        b.topPicksRow.removeAllViews()
+        val badges = listOf("TOP PICK", "TRENDING", "POPULAR", "FEATURED")
+        val tints = intArrayOf(
+            0xFF2A0A12.toInt(),
+            0xFF1C0F14.toInt(),
+            0xFF2B1218.toInt(),
+            0xFF171114.toInt()
+        )
+        models.take(4).forEachIndexed { idx, model ->
+            b.topPicksRow.addView(
+                buildEditorialCard(
+                    model = model,
+                    superLabel = badges[idx % badges.size],
+                    footerColor = tints[idx % tints.size]
+                )
+            )
+        }
+
+        // 2. Apple Music "Trending Now" Shelf (items 4..14)
         b.shelfRow.removeAllViews()
-        models.take(12).forEach { model ->
+        models.drop(4).take(10).ifEmpty { models.take(10) }.forEach { model ->
             val card = layoutInflater.inflate(R.layout.item_music_card, b.shelfRow, false)
             Thumbs.load(card.findViewById(R.id.art), model.thumbnailUrl)
             card.findViewById<TextView>(R.id.title).text = model.title
             card.findViewById<TextView>(R.id.subtitle).text = model.uploader
             card.setOnClickListener { playSong(model, radio = true) }
+            card.setOnLongClickListener {
+                showAppleMusicTrackSheet(model)
+                true
+            }
+            Motion.pressable(card, 0.95f)
             b.shelfRow.addView(card)
         }
 
-        // --- Popular list ---
-        b.popularTitle.isVisible = models.isNotEmpty()
+        // 3. Apple Music "Top Songs" Ranked List
         b.popularList.removeAllViews()
-        models.drop(12).take(15).forEach { model ->
+        models.drop(10).take(15).ifEmpty { models.take(12) }.forEachIndexed { index, model ->
             val row = layoutInflater.inflate(R.layout.item_music_row, b.popularList, false)
             Thumbs.load(row.findViewById(R.id.art), model.thumbnailUrl)
+            row.findViewById<TextView>(R.id.rank)?.apply {
+                text = (index + 1).toString()
+                isVisible = true
+            }
             row.findViewById<TextView>(R.id.title).text = model.title
             row.findViewById<TextView>(R.id.subtitle).text = model.uploader
             row.findViewById<TextView>(R.id.duration).text = model.durationLabel
             row.setOnClickListener { playSong(model, radio = true) }
+            row.setOnLongClickListener {
+                showAppleMusicTrackSheet(model)
+                true
+            }
+            Motion.pressable(row, 0.985f)
             b.popularList.addView(row)
         }
+
+        // Staggered entrance (skipped when animations are off in settings)
+        Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18), limit = 4)
+        Motion.enter(b.shelfRow.children.toList(), AppPrefs.animations, dp(14), limit = 6)
+        Motion.enter(b.popularList.children.toList(), AppPrefs.animations, dp(10), limit = 8)
+    }
+
+    /** Builds an authentic Apple Music tall editorial card (240dp x 300dp). */
+    private fun buildEditorialCard(
+        model: VideoUiModel,
+        superLabel: String,
+        footerColor: Int
+    ): View {
+        val ctx = requireContext()
+        val container = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(dp(236), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = dp(14)
+            }
+        }
+
+        val superText = TextView(ctx).apply {
+            text = superLabel
+            textSize = 11f
+            letterSpacing = 0.06f
+            setTextColor(Themes.onSurfaceVariantColor(ctx))
+            setTypeface(null, Typeface.BOLD)
+        }
+        container.addView(superText)
+
+        val cardFrame = FrameLayout(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(236), dp(286)).apply {
+                topMargin = dp(6)
+            }
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(footerColor)
+            }
+            clipToOutline = true
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            elevation = dp(6).toFloat()
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { playSong(model, radio = true) }
+            setOnLongClickListener {
+                showAppleMusicTrackSheet(model)
+                true
+            }
+            Motion.pressable(this, 0.97f)
+        }
+
+        val artView = ImageView(ctx).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(210),
+                Gravity.TOP
+            )
+        }
+        Thumbs.load(artView, model.thumbnailUrl)
+        cardFrame.addView(artView)
+
+        val footer = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(12))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(footerColor, Color.BLACK)
+            )
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(82),
+                Gravity.BOTTOM
+            )
+        }
+
+        footer.addView(
+            TextView(ctx).apply {
+                text = model.title
+                textSize = 15f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(Color.WHITE)
+                setTypeface(null, Typeface.BOLD)
+            }
+        )
+        footer.addView(
+            TextView(ctx).apply {
+                text = model.uploader
+                textSize = 13f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(0xCCFFFFFF.toInt())
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2) }
+            }
+        )
+
+        cardFrame.addView(footer)
+        container.addView(cardFrame)
+        return container
+    }
+
+    /** Long-press context sheet (shared iOS-style ActionSheet). */
+    private fun showAppleMusicTrackSheet(model: VideoUiModel) {
+        val ctx = requireContext()
+        val items = mutableListOf(
+            ActionSheet.Item("Play Now") { playSong(model, radio = false) },
+            ActionSheet.Item("Start Station") { playSong(model, radio = true) }
+        )
+        // Favorite only toggles the track that is actually loaded in the player, so it never
+        // starts playback by surprise or flips the wrong song.
+        if (PlaybackCenter.currentEntry?.url == model.url) {
+            val isFav = LocalStore.isFavorite(ctx, model.url)
+            items += ActionSheet.Item(if (isFav) "Remove from Favorites" else "Add to Favorites", accent = true) {
+                val nowFav = PlaybackCenter.toggleFavoriteCurrent()
+                Toast.makeText(
+                    ctx,
+                    if (nowFav) R.string.added_to_favorites else R.string.removed_from_favorites,
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        ActionSheet.show(ctx, model.title, model.uploader, items)
     }
 
     private fun buildGenreTiles() {
@@ -190,30 +394,29 @@ class MusicFragment : Fragment() {
         GENRES.forEach { genre ->
             val ctx = requireContext()
             val tile = FrameLayout(ctx).apply {
-                minimumHeight = dp(84)
+                minimumHeight = dp(90)
                 background = GradientDrawable().apply {
                     orientation = GradientDrawable.Orientation.TL_BR
-                    cornerRadius = dp(16).toFloat()
+                    cornerRadius = dp(14).toFloat()
                     colors = intArrayOf(genre.top, genre.bottom)
                 }
-                // Clip the decorative note to the rounded corners.
                 clipToOutline = true
                 outlineProvider = ViewOutlineProvider.BACKGROUND
                 isClickable = true
                 isFocusable = true
+                Motion.pressable(this, 0.95f)
 
-                // Big faded note peeking out of the corner.
                 addView(
                     ImageView(ctx).apply {
                         setImageResource(R.drawable.ic_music_note)
                         setColorFilter(Color.WHITE)
-                        alpha = 0.22f
-                        rotation = 22f
+                        alpha = 0.18f
+                        rotation = 18f
                         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                     },
-                    FrameLayout.LayoutParams(dp(64), dp(64), Gravity.END or Gravity.BOTTOM).apply {
-                        marginEnd = -dp(8)
-                        bottomMargin = -dp(10)
+                    FrameLayout.LayoutParams(dp(64), dp(64), Gravity.END or Gravity.TOP).apply {
+                        marginEnd = -dp(6)
+                        topMargin = -dp(6)
                     }
                 )
                 addView(
@@ -221,17 +424,16 @@ class MusicFragment : Fragment() {
                         text = genre.label
                         textSize = 16f
                         setTextColor(Color.WHITE)
-                        setTypeface(null, android.graphics.Typeface.BOLD)
+                        setTypeface(null, Typeface.BOLD)
                     },
                     FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
-                        Gravity.START or Gravity.TOP
-                    ).apply { setMargins(dp(14), dp(14), dp(14), dp(14)) }
+                        Gravity.START or Gravity.BOTTOM
+                    ).apply { setMargins(dp(14), dp(14), dp(14), dp(12)) }
                 )
                 setOnClickListener {
                     if (genre.query == null) {
-                        // Trending chip: scroll back to the top shelf.
                         binding.root.smoothScrollTo(0, 0)
                         load()
                     } else {
@@ -259,24 +461,29 @@ class MusicFragment : Fragment() {
     ).toInt()
 
     override fun onDestroyView() {
+        // Stop pulsing skeleton animators and any in-flight load: they hold the old views.
+        loadJob?.cancel()
+        loadJob = null
+        skeletonPulse?.cancel()
+        skeletonPulse = null
         super.onDestroyView()
         _binding = null
     }
 
     companion object {
         private val GENRES = listOf(
-            Genre("Trending", null, 0xFF1DB954.toInt(), 0xFF126B3A.toInt()),
-            Genre("Pop", "pop hits", 0xFFF06292.toInt(), 0xFFAD1457.toInt()),
-            Genre("Hip-Hop", "hip hop hits", 0xFF7E57C2.toInt(), 0xFF4527A0.toInt()),
-            Genre("Bollywood", "bollywood songs", 0xFFFFA726.toInt(), 0xFFE65100.toInt()),
-            Genre("Bangla", "bangla songs", 0xFF66BB6A.toInt(), 0xFF2E7D32.toInt()),
-            Genre("Rock", "rock hits", 0xFFEF5350.toInt(), 0xFFB71C1C.toInt()),
-            Genre("EDM", "edm hits", 0xFF26C6DA.toInt(), 0xFF00838F.toInt()),
-            Genre("Lofi", "lofi songs", 0xFF8D6E63.toInt(), 0xFF4E342E.toInt()),
-            Genre("Classical", "classical music", 0xFFAB47BC.toInt(), 0xFF6A1B9A.toInt()),
-            Genre("Indie", "indie songs", 0xFF42A5F5.toInt(), 0xFF1565C0.toInt()),
-            Genre("Devotional", "devotional songs", 0xFFFFB300.toInt(), 0xFFFF8F00.toInt()),
-            Genre("Instrumental", "instrumental music", 0xFF26A69A.toInt(), 0xFF00695C.toInt())
+            Genre("Top Charts", null, 0xFFFF0033.toInt(), 0xFF8A0019.toInt()),
+            Genre("Pop", "pop hits", 0xFFFF3B5C.toInt(), 0xFFB0123B.toInt()),
+            Genre("Hip-Hop", "hip hop hits", 0xFF3A3A44.toInt(), 0xFF111116.toInt()),
+            Genre("Bollywood", "bollywood songs", 0xFFFF7A3D.toInt(), 0xFFE0112B.toInt()),
+            Genre("Bangla", "bangla songs", 0xFFFF4D4D.toInt(), 0xFF8E1020.toInt()),
+            Genre("Rock", "rock hits", 0xFFE5173F.toInt(), 0xFF4A0010.toInt()),
+            Genre("Dance & EDM", "edm hits", 0xFFFF2E93.toInt(), 0xFF7A1FA2.toInt()),
+            Genre("Chill & Lofi", "lofi songs", 0xFF8C3B5C.toInt(), 0xFF3A1A2E.toInt()),
+            Genre("Classical", "classical music", 0xFFC2475A.toInt(), 0xFF5C1A36.toInt()),
+            Genre("Indie", "indie songs", 0xFFFF6B6B.toInt(), 0xFFC2185B.toInt()),
+            Genre("Acoustic", "acoustic songs", 0xFFFFA14A.toInt(), 0xFFB5352F.toInt()),
+            Genre("Essentials", "instrumental music", 0xFF55555F.toInt(), 0xFF1E1E24.toInt())
         )
     }
 }

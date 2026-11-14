@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Glassmorphism surfaces (dark theme): smoky translucent white with a bright hairline -->
+    <color name="glass_top">#2EFFFFFF</color>
+    <color name="glass_bottom">#12FFFFFF</color>
+    <color name="glass_stroke">#33FFFFFF</color>
+    <color name="glass_sheet">#F01C1C20</color>
+</resources>
