@@ -1,6 +1,8 @@
 package com.sparktube.app.ui.music
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
+import android.os.Build
 import android.view.MotionEvent
 import android.view.View
 import android.view.animation.DecelerateInterpolator
@@ -28,9 +30,13 @@ object Motion {
         }
     }
 
+    /** False when the user turned animations off system-wide (Remove animations / scale 0). */
+    fun animatorsEnabled(): Boolean =
+        Build.VERSION.SDK_INT < 26 || ValueAnimator.areAnimatorsEnabled()
+
     /** Fade + rise in, staggered. Only the first [limit] items animate; the rest just appear. */
     fun enter(views: List<View>, enabled: Boolean, rise: Float, limit: Int = 8) {
-        if (!enabled) return
+        if (!enabled || !animatorsEnabled()) return
         views.take(limit).forEachIndexed { i, v ->
             v.alpha = 0f
             v.translationY = rise

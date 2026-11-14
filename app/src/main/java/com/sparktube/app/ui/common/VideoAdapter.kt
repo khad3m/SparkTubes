@@ -2,18 +2,18 @@ package com.sparktube.app.ui.common
 
 import android.view.LayoutInflater
 import android.view.ViewGroup
-import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
-import com.sparktube.app.R
 import com.sparktube.app.databinding.ItemVideoBinding
+import com.sparktube.app.ui.music.Motion
+import com.sparktube.app.util.Avatars
 import com.sparktube.app.util.Thumbs
 
 class VideoAdapter(
     private val onClick: (VideoUiModel) -> Unit,
-    private val onLongClick: ((VideoUiModel) -> Boolean)? = null
+    private val onLongClick: ((VideoUiModel) -> Boolean)? = null,
+    private val onAudioClick: ((VideoUiModel) -> Unit)? = null
 ) : ListAdapter<VideoUiModel, VideoAdapter.VH>(DIFF) {
 
     companion object {
@@ -47,8 +47,21 @@ class VideoAdapter(
         }
 
         Thumbs.load(b.thumbnail, item.thumbnailUrl)
-        Thumbs.load(b.avatar, item.uploaderAvatarUrl)
+        Avatars.load(b.avatar, item.uploaderAvatarUrl, item.uploader)
 
+        if (onAudioClick != null) {
+            b.cardAudioQuickBtn.visibility = android.view.View.VISIBLE
+            b.cardAudioQuickBtn.setOnClickListener {
+                onAudioClick.invoke(item)
+            }
+        } else {
+            b.cardAudioQuickBtn.visibility = android.view.View.GONE
+        }
+
+        b.root.animate().cancel()
+        b.root.scaleX = 1f
+        b.root.scaleY = 1f
+        Motion.pressable(b.root, 0.98f)
         b.root.setOnClickListener { onClick(item) }
         b.root.setOnLongClickListener {
             onLongClick?.invoke(item) ?: false

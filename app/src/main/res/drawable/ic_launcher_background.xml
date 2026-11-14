@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:endColor="#0B0B0F"
+                android:startColor="#25252C" />
+        </shape>
+    </item>
+    <!-- soft red glow behind the play mark -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.5"
+                android:centerY="0.58"
+                android:endColor="#00FF0033"
+                android:gradientRadius="62%p"
+                android:startColor="#4DFF0033"
+                android:type="radial" />
+        </shape>
+    </item>
+</layer-list>

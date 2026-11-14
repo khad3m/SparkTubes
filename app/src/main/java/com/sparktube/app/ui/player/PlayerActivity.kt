@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -13,8 +14,7 @@ import android.os.Looper
 import android.text.method.LinkMovementMethod
 import android.util.Rational
 import android.util.TypedValue
-import android.view.GestureDetector
-import android.view.MotionEvent
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -54,25 +54,21 @@ import com.sparktube.app.ui.common.CommentAdapter
 import com.sparktube.app.ui.common.VideoAdapter
 import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
+import com.sparktube.app.ui.music.NowPlayingActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Formatters
 import com.sparktube.app.util.Avatars
 import com.sparktube.app.util.PanelTransitions
 import com.sparktube.app.util.Themes
 import com.sparktube.app.util.Thumbs
-import coil.load
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * YouTube-style watch page: standard 16:9 player on top, title, a foldable
- * description card (views · date, tap to expand), channel row with
- * subscribe, action pills (favorite / share / download / background audio /
- * PiP), a comments card that opens a full comments sheet, and related
- * videos below. Quality, playback
- * speed and the dubbing audio track live inside the player's gear menu.
- * A swipe down on the video shrinks playback into the mini player.
+ * YouTube-style watch page with upper-left dual Audio/Video mini switcher buttons:
+ * - Upper-left [Audio] button switches playback to Audio Player (NowPlayingActivity)
+ * - Upper-left [Video] button resumes full video playback
  */
 @OptIn(UnstableApi::class)
 class PlayerActivity : AppCompatActivity() {
@@ -81,8 +77,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var relatedAdapter: VideoAdapter
     private var channelSubCount: Long = -1L
 
-    private var swipeTriggered = false
-    private lateinit var gestureDetector: GestureDetector
+    private lateinit var gestures: PlayerGestures
 
     /** Mirrors the built-in controller's visibility (gear / seek controls). */
     private var controllerVisible = false
@@ -124,7 +119,10 @@ class PlayerActivity : AppCompatActivity() {
 
         override fun onFavoriteChanged(url: String, isFavorite: Boolean) = updateFavoriteUi()
 
-        override fun onAudioOnlyChanged(audioOnly: Boolean) = bindCatalog()
+        override fun onAudioOnlyChanged(audioOnly: Boolean) {
+            updateModeSwitcherUi()
+            bindCatalog()
+        }
 
         override fun onNotice(message: String) {
             Toast.makeText(this@PlayerActivity, message, Toast.LENGTH_SHORT).show()
@@ -139,17 +137,8 @@ class PlayerActivity : AppCompatActivity() {
         Themes.apply(this)
         super.onCreate(savedInstanceState)
 
-        // Expands UP out of the mini player (and collapses back down).
         PanelTransitions.install(this)
 
-        // Edge-to-edge from the very first frame — THE punch-hole fix:
-        // LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES alone only lets the
-        // WINDOW cover the cutout area; with the default decor-fits-system-
-        // windows behaviour the framework still pads the content away from
-        // the cutout, so the notch stayed a black band in fullscreen.
-        // Going fully edge-to-edge + SHORT_EDGES lets the video really render
-        // under the punch-hole in every scale mode (insets are then applied
-        // manually to the overlay buttons below).
         WindowCompat.setDecorFitsSystemWindows(window, false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes = window.attributes.apply {
@@ -163,15 +152,10 @@ class PlayerActivity : AppCompatActivity() {
 
         applyWindowInsets()
 
-        // Watching a video should keep the screen on.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // The fullscreen + scale buttons only appear together with the
-        // player's own controls (gear / seek bar), like the official app.
         binding.fullscreenButton.isVisible = false
         binding.scaleButton.isVisible = false
-        // Explicit object: a lambda would be ambiguous between the two
-        // setControllerVisibilityListener overloads.
         binding.playerView.setControllerVisibilityListener(
             object : PlayerView.ControllerVisibilityListener {
                 override fun onVisibilityChanged(visibility: Int) {
@@ -181,22 +165,36 @@ class PlayerActivity : AppCompatActivity() {
             }
         )
 
-        // Watch-page chrome that depends on the resolved catalog: the action
-        // pills and the subscribe button only appear once the video is
-        // actually loaded (they used to flash in with placeholder labels
-        // the moment the screen opened).
+        // Upper-left dual mini buttons: [Audio] and [Video]
+        binding.miniMusicBtn.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            if (PlaybackCenter.hasMedia) {
+                PlaybackCenter.switchToAudioPlayerMode()
+                Toast.makeText(this, R.string.switched_to_audio_player, Toast.LENGTH_SHORT).show()
+                NowPlayingActivity.start(this)
+                finish()
+            }
+        }
+        binding.miniVideoBtn.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            if (PlaybackCenter.audioOnlyMode || PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO) {
+                PlaybackCenter.switchToVideoPlayerMode()
+                PlaybackCenter.attachView(binding.playerView)
+                updateModeSwitcherUi()
+                Toast.makeText(this, R.string.switched_to_video_player, Toast.LENGTH_SHORT).show()
+            }
+        }
+        updateModeSwitcherUi()
+
         binding.actionRow.isVisible = false
         binding.subscribeButton.isVisible = false
 
-        // Foldable description + comments entry (both appear once the
-        // video's catalog has loaded).
         binding.description.setLinkTextColor(Themes.accentColor(this))
         binding.descCard.setOnClickListener { toggleDescription() }
         binding.descToggle.setOnClickListener { toggleDescription() }
         binding.commentsCard.setOnClickListener { openComments() }
 
         relatedAdapter = VideoAdapter(onClick = { model ->
-            // Play inside this page so swipe/mini flow keeps working.
             val entry = model.toQueueEntry()
             PlaybackCenter.playVideo(entry)
         })
@@ -210,8 +208,9 @@ class PlayerActivity : AppCompatActivity() {
         binding.actionShare.setOnClickListener { shareVideo() }
         binding.actionDownload.setOnClickListener { onDownloadClicked() }
         binding.actionBackground.setOnClickListener {
-            PlaybackCenter.switchToAudioOnly()
-            Toast.makeText(this, R.string.background_started, Toast.LENGTH_SHORT).show()
+            PlaybackCenter.switchToAudioPlayerMode()
+            Toast.makeText(this, R.string.switched_to_audio_player, Toast.LENGTH_SHORT).show()
+            NowPlayingActivity.start(this)
             finish()
         }
         binding.actionPip.setOnClickListener { enterPipOrToast() }
@@ -219,56 +218,39 @@ class PlayerActivity : AppCompatActivity() {
         binding.channelInfo.setOnClickListener { openChannel() }
         binding.subscribeButton.setOnClickListener { toggleSubscribe() }
 
-        // Fullscreen toggle: portrait <-> landscape without restarting the activity.
         binding.fullscreenButton.setOnClickListener { toggleFullscreen() }
 
-        // Fullscreen scale mode: Fit -> Crop (fills the screen) -> Stretch.
         binding.scaleButton.setOnClickListener { cycleScaleMode() }
         applyScaleMode()
 
-        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean {
-                swipeTriggered = false
-                return false
-            }
-
-            override fun onScroll(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                dx: Float,
-                dy: Float
-            ): Boolean {
-                // Total drag distance from the initial touch (e1) to the
-                // current position: the per-event dy the API reports is only
-                // a few pixels per move, so a threshold on it almost never
-                // fired — the swipe-down-to-minimize felt dead.
-                val start = e1 ?: return false
-                val totalDy = e2.y - start.y
-                val totalDx = kotlin.math.abs(e2.x - start.x)
-                if (!swipeTriggered && totalDy > SWIPE_MIN_DISTANCE && totalDy > totalDx * 1.4f) {
-                    swipeTriggered = true
-                    // Swipe down on the video collapses playback into the
-                    // mini player, like the official YouTube app: the playback
-                    // service keeps playing and MainActivity's mini player
-                    // picks the video surface up.
-                    finish()
-                }
-                return false
-            }
-        })
-        binding.playerView.setOnTouchListener { v, event ->
-            gestureDetector.onTouchEvent(event)
-            v.onTouchEvent(event)
-        }
+        gestures = PlayerGestures(
+            activity = this,
+            hud = binding.gestureHud,
+            hudIcon = binding.hudIcon,
+            hudBar = binding.hudBar,
+            hudText = binding.hudText,
+            isLandscape = {
+                resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            },
+            onMinimize = { finish() }
+        )
+        binding.playerView.setOnTouchListener { v, event -> gestures.onTouch(v, event) }
+        binding.playerView.controllerShowTimeoutMs = 3500
 
         hookGearMenu()
 
         applyOrientation(resources.configuration)
 
         if (intent.getBooleanExtra(EXTRA_ATTACH, false) && PlaybackCenter.hasMedia) {
+            if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO || PlaybackCenter.audioOnlyMode) {
+                PlaybackCenter.switchToVideoPlayerMode()
+            } else {
+                PlaybackCenter.switchBackToVideo()
+            }
             loadedUrl = PlaybackCenter.currentEntry?.url
             PlaybackCenter.currentEntry?.let(::bind)
             bindCatalog()
+            updateModeSwitcherUi()
         } else {
             val entry = entryFromIntent()
             if (entry == null) {
@@ -280,43 +262,48 @@ class PlayerActivity : AppCompatActivity() {
                 loadedUrl = entry.url
                 bind(entry)
                 bindCatalog()
+            } else if (PlaybackCenter.currentEntry?.url == entry.url && PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO) {
+                PlaybackCenter.switchToVideoPlayerMode()
+                loadedUrl = entry.url
+                bind(entry)
+                bindCatalog()
             } else {
                 PlaybackCenter.playVideo(entry)
             }
+            updateModeSwitcherUi()
         }
     }
 
-    /**
-     * Puts quality / speed / audio-track selection behind the gear button of
-     * the player's built-in controller.
-     */
+    private fun updateModeSwitcherUi() {
+        val isAudio = PlaybackCenter.audioOnlyMode || PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO
+        binding.miniMusicBtn.setBackgroundResource(
+            if (isAudio) R.drawable.bg_mode_switch_active else R.drawable.bg_mode_switch_inactive
+        )
+        binding.miniVideoBtn.setBackgroundResource(
+            if (!isAudio) R.drawable.bg_mode_switch_active else R.drawable.bg_mode_switch_inactive
+        )
+        binding.miniMusicIcon.setColorFilter(if (isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
+        binding.miniMusicLabel.setTextColor(if (isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
+        binding.miniVideoIcon.setColorFilter(if (!isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
+        binding.miniVideoLabel.setTextColor(if (!isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
+    }
+
     private fun hookGearMenu() {
         val gear = binding.playerView.findViewById<View>(Media3R.id.exo_settings)
         gear?.setOnClickListener { showVideoSettingsSheet() }
     }
 
-    /** Fullscreen + scale buttons follow the built-in controller's visibility. */
+    /** Fullscreen + scale buttons follow the built-in controller's visibility; top-left switcher stays accessible in portrait and follows controller in fullscreen. */
     private fun syncFullscreenButtonVisibility() {
         val visible = !isInPictureInPictureMode && controllerVisible
+        val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         binding.fullscreenButton.isVisible = visible
-        // Fit / Crop / Stretch is a fullscreen-only control: the portrait
-        // box always shows the full frame, so the button stays hidden there.
-        binding.scaleButton.isVisible = visible &&
-            resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        binding.scaleButton.isVisible = visible && landscape
+        binding.topLeftModeSwitcher.isVisible = !isInPictureInPictureMode && (!landscape || controllerVisible)
     }
 
-    /** Latest top inset from the status bar / cutout (0 once bars are hidden). */
     private var lastTopInset = 0
 
-    /**
-     * Keeps the whole video visible on the portrait watch page: the player
-     * box sits BELOW the status bar / punch-hole. The window being
-     * edge-to-edge (needed for fullscreen) used to slide the video under
-     * them, cutting off its top strip in normal mode. Landscape fullscreen
-     * keeps topMargin 0 so the video still renders under the (hidden) bars
-     * and the cutout — the punch-hole fullscreen fix. PiP gets 0 too (the
-     * floating window has no insets).
-     */
     private fun applyPlayerTopInset() {
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         binding.playerView.updateLayoutParams<ConstraintLayout.LayoutParams> {
@@ -324,11 +311,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Manual insets now that the window draws edge-to-edge: the overlay
-     * buttons keep a safe distance from the status bar / cutout and the
-     * page content clears the gesture bar.
-     */
     private fun applyWindowInsets() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { root, insets ->
             val bars = insets.getInsets(
@@ -338,6 +320,10 @@ class PlayerActivity : AppCompatActivity() {
             val startInset = if (rtl) bars.right else bars.left
             val endInset = if (rtl) bars.left else bars.right
 
+            binding.topLeftModeSwitcher.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                topMargin = bars.top + dp(8)
+                marginStart = dp(10) + startInset
+            }
             binding.backButton.updateLayoutParams<ConstraintLayout.LayoutParams> {
                 topMargin = bars.top + dp(4)
                 marginStart = dp(4) + startInset
@@ -362,7 +348,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** Real fullscreen: hide status + navigation bars while landscape. */
     private fun applyImmersive(landscape: Boolean) {
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (landscape) {
@@ -374,13 +359,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    // ----- Fullscreen scale mode -----
-
-    /**
-     * Applies the scale preference (fit / crop / stretch). It is a FULLSCREEN
-     * setting: the portrait watch page is always RESIZE_MODE_FIT so no part
-     * of the video is ever cropped inside the normal player box.
-     */
     private fun applyScaleMode() {
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val mode = if (landscape) when (AppPrefs.fullscreenScale) {
@@ -393,7 +371,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.playerView.resizeMode = mode
     }
 
-    /** Cycles Fit -> Crop -> Stretch and applies + persists the choice. */
     private fun cycleScaleMode() {
         val next = when (AppPrefs.fullscreenScale) {
             AppPrefs.SCALE_FIT -> AppPrefs.SCALE_CROP
@@ -422,14 +399,12 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         PlaybackCenter.addListener(playbackListener)
-        // Playback can start resolving BEFORE this page is listening (Play
-        // all / a playlist video starts the queue, then opens the page), so
-        // pick the spinner state up here instead of missing it.
         binding.loading.isVisible = PlaybackCenter.isResolving && !binding.errorView.isVisible
         downloadHandler.post(downloadPoll)
         if (PlaybackCenter.hasMedia) {
             PlaybackCenter.player.playWhenReady = true
         }
+        updateModeSwitcherUi()
     }
 
     override fun onResume() {
@@ -439,16 +414,9 @@ class PlayerActivity : AppCompatActivity() {
         if (!isInPictureInPictureMode) {
             PlaybackCenter.attachView(binding.playerView)
         }
+        updateModeSwitcherUi()
     }
 
-    // ----- Close animation -----
-
-    /**
-     * Android 14+: registers the close animation once for this page. The
-     * default activity-close animation slides the page sideways (left to
-     * right on most devices), which reads wrong when the video is really
-     * collapsing DOWN into the mini player at the bottom of the screen.
-     */
     private fun applyCloseTransition() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
         if (AppPrefs.animations) {
@@ -458,12 +426,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Every way out of the watch page (swipe down, back button / gesture,
-     * "play in background") collapses into the mini player, so all of them
-     * slide down. Older Android has no per-activity registration: the
-     * override has to be requested right after finish().
-     */
     @Suppress("DEPRECATION")
     override fun finish() {
         super.finish()
@@ -483,13 +445,15 @@ class PlayerActivity : AppCompatActivity() {
         super.onStop()
         downloadHandler.removeCallbacks(downloadPoll)
         PlaybackCenter.removeListener(playbackListener)
-        // Return to sensor portrait so the next video starts the standard way.
         if (requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
             requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
-    // ----- PiP -----
+    override fun onDestroy() {
+        if (::gestures.isInitialized) gestures.release()
+        super.onDestroy()
+    }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
@@ -517,7 +481,6 @@ class PlayerActivity : AppCompatActivity() {
                     .build()
             )
         } catch (e: Exception) {
-            // Some ROMs throw when PiP is unavailable.
         }
     }
 
@@ -528,19 +491,17 @@ class PlayerActivity : AppCompatActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         PlaybackCenter.inPip = isInPictureInPictureMode
         if (isInPictureInPictureMode) {
-            // Show the video only: no back button, no fullscreen button, no page.
+            binding.topLeftModeSwitcher.isVisible = false
             binding.backButton.isVisible = false
             binding.fullscreenButton.isVisible = false
             binding.scaleButton.isVisible = false
             binding.scrollArea.isVisible = false
             binding.loading.isVisible = false
             binding.errorView.isVisible = false
-            // Expand player to the whole window
             binding.playerView.updateLayoutParams<ConstraintLayout.LayoutParams> {
                 height = ViewGroup.LayoutParams.MATCH_PARENT
                 dimensionRatio = null
             }
-            // The PiP window has no insets — clear the portrait offset.
             applyPlayerTopInset()
         } else {
             binding.scrollArea.isVisible = true
@@ -553,8 +514,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    // ----- Orientation -----
-
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         applyOrientation(newConfig)
@@ -565,8 +524,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.fullscreenButton.setImageResource(
             if (landscape) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen
         )
-        // Landscape video = immersive: no notification bar, no nav bar, the
-        // video fills the whole screen. Portrait restores normal system bars.
         applyImmersive(landscape)
         if (landscape) {
             binding.scrollArea.isVisible = false
@@ -581,14 +538,10 @@ class PlayerActivity : AppCompatActivity() {
                 dimensionRatio = "16:9"
             }
         }
-        // Orientation-dependent state: the scale preference is
-        // fullscreen-only and the portrait box needs its status-bar offset.
         applyScaleMode()
         applyPlayerTopInset()
         syncFullscreenButtonVisibility()
     }
-
-    // ----- Binding -----
 
     private fun entryFromIntent(): QueueEntry? {
         val url = intent.getStringExtra(EXTRA_URL) ?: return null
@@ -612,8 +565,8 @@ class PlayerActivity : AppCompatActivity() {
 
         updateFavoriteUi()
         updateDownloadUi()
+        updateModeSwitcherUi()
 
-        // History + favourites may have changed, list them below.
         bindCatalog()
     }
 
@@ -621,8 +574,6 @@ class PlayerActivity : AppCompatActivity() {
         val entry = PlaybackCenter.currentEntry ?: return
         val catalog = PlaybackCenter.catalog
 
-        // Pills + subscribe stay hidden until the catalog (uploader info,
-        // views, related list) has actually loaded for this video.
         binding.actionRow.isVisible = catalog != null
 
         if (catalog != null) {
@@ -635,7 +586,6 @@ class PlayerActivity : AppCompatActivity() {
             }
             relatedAdapter.submitList(catalog.related.map { it.toUiModel() })
         } else {
-            // New video still resolving: nothing of the old one may linger.
             binding.descCard.isVisible = false
             descBoundFor = null
             resetComments()
@@ -643,9 +593,6 @@ class PlayerActivity : AppCompatActivity() {
         updateSubscribeUi()
     }
 
-    // ----- Description card -----
-
-    /** Views · date line plus the description, folded to 3 lines by default. */
     private fun bindDescription(catalog: StreamCatalog, url: String) {
         val meta = listOfNotNull(
             catalog.viewCount.takeIf { it >= 0 }
@@ -653,10 +600,9 @@ class PlayerActivity : AppCompatActivity() {
             catalog.uploadDateText.takeIf { it.isNotBlank() }
         ).joinToString("  ·  ")
         binding.views.text = meta
+        binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
         binding.descCard.isVisible = true
 
-        // Already bound for this video (e.g. audio-only toggle): keep the
-        // user's fold state instead of collapsing under them.
         if (descBoundFor == url) return
         descBoundFor = url
         descExpanded = false
@@ -670,7 +616,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.descToggle.isVisible = false
         if (hasDescription) {
             binding.description.text = text
-            // Only offer "Show more" when the text really is cut off.
             binding.description.doOnPreDraw { updateDescToggleVisibility() }
         }
     }
@@ -699,8 +644,6 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
         binding.description.maxLines = if (descExpanded) Int.MAX_VALUE else DESC_COLLAPSED_LINES
-        // Links only work while expanded: a link-enabled TextView swallows
-        // taps, which would stop the card itself from toggling.
         binding.description.movementMethod =
             if (descExpanded) LinkMovementMethod.getInstance() else null
         binding.descToggle.setText(
@@ -719,8 +662,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    // ----- Comments card -----
-
     private fun resetComments() {
         commentsJob?.cancel()
         commentsJob = null
@@ -729,9 +670,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.commentsCard.isVisible = false
     }
 
-    /** Fetches the first comments page once per video for the preview card. */
     private fun maybeLoadComments(url: String) {
-        // Downloaded files have no online comments.
         if (url.startsWith("file://")) {
             binding.commentsCard.isVisible = false
             return
@@ -755,7 +694,6 @@ class PlayerActivity : AppCompatActivity() {
                 throw e
             } catch (e: Exception) {
                 if (commentsFor != url) return@launch
-                // The sheet retries on open, so a tap on the card still works.
                 binding.commentsStatus.setText(R.string.comments_error)
                 binding.commentsStatus.isVisible = true
             }
@@ -812,7 +750,6 @@ class PlayerActivity : AppCompatActivity() {
                     getString(R.string.subscribers_fmt, Formatters.formatViewCount(channel.subscriberCount))
                 updateSubscribeUi()
             } catch (e: Exception) {
-                // Sub count is optional decoration; ignore failures.
             }
         }
     }
@@ -830,14 +767,10 @@ class PlayerActivity : AppCompatActivity() {
             getString(if (isFav) R.string.saved_short else R.string.action_favorite)
     }
 
-    // ----- Download pill -----
-
     private fun onDownloadClicked() {
         val entry = PlaybackCenter.currentEntry ?: return
         when {
             DownloadCenter.isDownloaded(this, entry.url) -> {
-                // Already downloaded: offer to delete it right here instead of
-                // sending the user to Library → Downloads.
                 confirmDeleteDownload()
             }
             DownloadCenter.hasActiveDownload(this, entry.url) -> {
@@ -847,7 +780,6 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** Deletes every finished download record of the current video. */
     private fun confirmDeleteDownload() {
         val entry = PlaybackCenter.currentEntry ?: return
         AlertDialog.Builder(this)
@@ -864,17 +796,9 @@ class PlayerActivity : AppCompatActivity() {
             .show()
     }
 
-    // ----- Add to playlist -----
-
-    /** The current video as a storable entry (playlists reuse VideoEntry). */
     private fun currentVideoEntry(): com.sparktube.app.data.VideoEntry? =
         PlaybackCenter.currentEntry?.toVideoEntry()
 
-    /**
-     * "Add to playlist" picker: every existing playlist (tapping one adds —
-     * or removes, when the video is already in it) plus a "New playlist"
-     * row that creates one on the spot.
-     */
     private fun showPlaylistSheet() {
         val video = currentVideoEntry() ?: return
         val sheet = BottomSheetDialog(this)
@@ -923,7 +847,6 @@ class PlayerActivity : AppCompatActivity() {
         showSheet(sheet, root, peekDp = 380)
     }
 
-    /** Name input dialog that creates a playlist and saves the video into it. */
     private fun showNewPlaylistDialog() {
         val video = currentVideoEntry() ?: return
         val input = android.widget.EditText(this).apply {
@@ -965,7 +888,6 @@ class PlayerActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Small dim helper line used inside bottom sheets. */
     private fun hintRow(text: String): TextView = TextView(this).apply {
         this.text = text
         textSize = 13f
@@ -999,9 +921,6 @@ class PlayerActivity : AppCompatActivity() {
         override fun run() {
             val entry = PlaybackCenter.currentEntry
             if (entry != null && !isFinishing) {
-                // Keep the registry in sync with the built-in download
-                // engine so a finished download flips to "Downloaded" right
-                // away (jobs also self-report, this covers app restarts).
                 if (DownloadCenter.hasActiveDownload(this@PlayerActivity, entry.url)) {
                     DownloadCenter.refreshStatuses(this@PlayerActivity)
                 }
@@ -1061,16 +980,12 @@ class PlayerActivity : AppCompatActivity() {
             binding.subscribeButton.isVisible = false
             return
         }
-        // Show it again: onCreate hides the button until the catalog loads,
-        // and nothing ever set it back to visible, so it never re-appeared.
         binding.subscribeButton.isVisible = true
         val subscribed = LocalStore.isSubscribed(this, channelUrl)
         binding.subscribeButton.text = getString(if (subscribed) R.string.subscribed else R.string.subscribe)
         binding.subscribeButton.setBackgroundResource(
             if (subscribed) R.drawable.bg_subscribe_on else R.drawable.bg_subscribe_off
         )
-        // The "subscribed" pill has a light background in the light theme,
-        // so its label must flip to a dark color there (stays white on accent).
         binding.subscribeButton.setTextColor(
             getColor(if (subscribed) R.color.subscribe_on_text else R.color.white)
         )
@@ -1117,11 +1032,6 @@ class PlayerActivity : AppCompatActivity() {
             setOnClickListener { onClick() }
         }
 
-    /**
-     * A category row for the gear menu: title on the left, the currently
-     * selected value on the right and a chevron — like the official
-     * YouTube player's settings menu.
-     */
     private fun sheetMenuRow(mainLabel: String, valueLabel: String, onClick: () -> Unit): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1176,16 +1086,6 @@ class PlayerActivity : AppCompatActivity() {
         sheet.show()
     }
 
-    /**
-     * The gear menu: categories first (quality, playback speed, audio
-     * track) — picking one opens its own list, like the official app.
-     *
-     * Quality and audio-track need the resolved stream catalog, so they only
-     * exist for online playback. Downloaded videos have no catalog — they
-     * used to hit the "cannot be played" gate here and the whole gear menu
-     * was unusable; playback speed works everywhere, so the menu always
-     * shows at least that.
-     */
     private fun showVideoSettingsSheet() {
         val catalog = PlaybackCenter.catalog
 
@@ -1257,6 +1157,7 @@ class PlayerActivity : AppCompatActivity() {
         root.addView(
             sheetRow(getString(R.string.quality_auto), currentHeight == null) {
                 PlaybackCenter.setVideoQuality(null)
+                binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
                 sheet.dismiss()
             }
         )
@@ -1269,12 +1170,15 @@ class PlayerActivity : AppCompatActivity() {
                 (if (useMuxed) " (muxed)" else "")
             root.addView(sheetRow(label, currentHeight == h) {
                 PlaybackCenter.setVideoQuality(h)
+                binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
                 sheet.dismiss()
             })
         }
         root.addView(
             sheetRow(getString(R.string.quality_audio_only), currentHeight == -1) {
                 PlaybackCenter.setVideoQuality(-1)
+                updateModeSwitcherUi()
+                binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
                 sheet.dismiss()
             }
         )
@@ -1295,6 +1199,9 @@ class PlayerActivity : AppCompatActivity() {
                     s == currentSpeed
                 ) {
                     PlaybackCenter.setSpeed(s)
+                    PlaybackCenter.catalog?.let {
+                        binding.qualityBadgeInfo.text = "${qualitySummary(it)} · ${speedSummary()}"
+                    }
                     sheet.dismiss()
                 }
             )
@@ -1350,7 +1257,6 @@ class PlayerActivity : AppCompatActivity() {
         private const val EXTRA_THUMB = "extra_thumb"
         private const val EXTRA_DURATION = "extra_duration"
         private const val EXTRA_ATTACH = "extra_attach"
-        private const val SWIPE_MIN_DISTANCE = 130f
         private const val DESC_COLLAPSED_LINES = 3
 
         fun start(context: Context, model: com.sparktube.app.ui.common.VideoUiModel) {

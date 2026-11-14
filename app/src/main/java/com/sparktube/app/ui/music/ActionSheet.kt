@@ -84,7 +84,7 @@ object ActionSheet {
                 minHeight = px(52)
                 setPadding(px(18), px(12), px(18), px(12))
                 setTextColor(
-                    if (item.accent) ctx.getColor(R.color.music_green) else Themes.onSurfaceColor(ctx)
+                    if (item.accent) ctx.getColor(R.color.accent_text) else Themes.onSurfaceColor(ctx)
                 )
                 if (rippleRes != 0) setBackgroundResource(rippleRes)
                 isClickable = true

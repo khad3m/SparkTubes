@@ -47,6 +47,7 @@ import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.ui.player.DownloadSheet
+import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.PanelTransitions
 import com.sparktube.app.util.Themes
@@ -55,13 +56,11 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * Apple Music Full-Screen Now Playing Sheet:
+ * Apple Music Full-Screen Now Playing Sheet with Upper-Left Dual Audio/Video Switcher:
+ * - Upper-left [Audio] and [Video] mini buttons: tapping [Video] switches seamlessly to PlayerActivity
  * - Dynamic artwork-sampled ambient gradient backdrop
  * - Spring-animated floating album artwork (1.0f playing, 0.80f paused)
  * - Interactive drag-down-to-dismiss that follows the finger
- * - Scrubber with elapsed time, audio badge, and negative remaining time (-3:12)
- * - Hardware volume slider bound to AudioManager.STREAM_MUSIC
- * - Interactive Lyrics / Track Info overlay toggle, Station builder, Download, and Up Next Queue
  */
 class NowPlayingActivity : AppCompatActivity() {
 
@@ -87,7 +86,6 @@ class NowPlayingActivity : AppCompatActivity() {
         override fun onQueueChanged() = bindUpNext()
     }
 
-    // Fast tick only while playing; slow tick (downloads/disk checks) at most once a second.
     private val progressRunnable = object : Runnable {
         override fun run() {
             if (isFinishing || isDestroyed) return
@@ -118,6 +116,26 @@ class NowPlayingActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
 
         binding.backButton.setOnClickListener { finish() }
+
+        // Upper-left dual mini buttons: [Audio] and [Video]
+        binding.miniMusicBtn.setOnClickListener { view ->
+            bounceButton(view)
+            // Already in Audio Player mode; ensure audio mode is active
+            if (PlaybackCenter.mode != PlaybackCenter.Mode.AUDIO && !PlaybackCenter.audioOnlyMode) {
+                PlaybackCenter.switchToAudioPlayerMode()
+            }
+            Toast.makeText(this, R.string.switched_to_audio_player, Toast.LENGTH_SHORT).show()
+        }
+
+        binding.miniVideoBtn.setOnClickListener { view ->
+            bounceButton(view)
+            if (PlaybackCenter.hasMedia) {
+                PlaybackCenter.switchToVideoPlayerMode()
+                Toast.makeText(this, R.string.switched_to_video_player, Toast.LENGTH_SHORT).show()
+                PlayerActivity.startResume(this)
+                finish()
+            }
+        }
 
         binding.playPauseButton.setOnClickListener { view ->
             bounceButton(view)
@@ -164,7 +182,6 @@ class NowPlayingActivity : AppCompatActivity() {
         }
         binding.upNextCard.setOnClickListener { showQueue() }
 
-        // Lyrics / info card: sits above the artwork (elevation), rounded, same square as the art
         val density = resources.displayMetrics.density
         binding.lyricsOverlay.apply {
             background = GradientDrawable().apply {
@@ -176,7 +193,6 @@ class NowPlayingActivity : AppCompatActivity() {
             elevation = 40f * density
         }
 
-        // Keep artwork (and the lyrics card) square inside the available space
         binding.artContainer.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
             val size = minOf(r - l, b - t).coerceAtLeast(0)
             val lp = binding.art.layoutParams
@@ -192,7 +208,6 @@ class NowPlayingActivity : AppCompatActivity() {
             }
         }
 
-        // Apple Music Scrubber
         binding.seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
@@ -215,9 +230,7 @@ class NowPlayingActivity : AppCompatActivity() {
             }
         })
 
-        // Apple Music Volume Slider
         setupVolumeSlider()
-        // bind() runs from onStart so it also refreshes when returning to the screen
     }
 
     private fun setupVolumeSlider() {
@@ -299,6 +312,11 @@ class NowPlayingActivity : AppCompatActivity() {
         ActionSheet.show(
             this, entry.title, entry.uploader,
             listOf(
+                ActionSheet.Item("Switch to Video Player") {
+                    PlaybackCenter.switchToVideoPlayerMode()
+                    PlayerActivity.startResume(this)
+                    finish()
+                },
                 ActionSheet.Item("Start Station") { restartRadio() },
                 ActionSheet.Item("Download") { onDownloadClicked() },
                 ActionSheet.Item("Share Song Link") {
@@ -312,10 +330,6 @@ class NowPlayingActivity : AppCompatActivity() {
         )
     }
 
-    /**
-     * Ambient backdrop from the artwork. Decodes a tiny 48px copy (not the full-size thumbnail),
-     * cancels any in-flight request when the track changes, and cross-fades to the new colors.
-     */
     private fun applyDynamicArtworkBackdrop(url: String) {
         backdropRequest?.dispose()
         val req = ImageRequest.Builder(this)
@@ -325,7 +339,6 @@ class NowPlayingActivity : AppCompatActivity() {
             .target { drawable ->
                 val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return@target
                 if (isFinishing || isDestroyed) return@target
-                // Artwork color pulled slightly toward the app's red so every track feels on-brand
                 val red = 0xFFFF0033.toInt()
                 val top = ColorUtils.blendARGB(tone(averageColor(bmp, 0, bmp.height / 2), 0.46f), red, 0.14f)
                 val mid = ColorUtils.blendARGB(tone(averageColor(bmp, bmp.height / 2, bmp.height), 0.22f), red, 0.07f)
@@ -369,8 +382,6 @@ class NowPlayingActivity : AppCompatActivity() {
         hsv[2] = value
         return Color.HSVToColor(hsv)
     }
-
-    // ----- Interactive drag-down to collapse (follows the finger, flings away, or springs back) -----
 
     private var downX = 0f
     private var downY = 0f
@@ -457,6 +468,10 @@ class NowPlayingActivity : AppCompatActivity() {
         val slack = (16 * resources.displayMetrics.density).toInt()
         val x = ev.rawX.toInt()
         val y = ev.rawY.toInt()
+        if (binding.topLeftModeSwitcher.getGlobalVisibleRect(hitRect)) {
+            hitRect.inset(-slack, -slack)
+            if (hitRect.contains(x, y)) return true
+        }
         if (binding.seekBar.getGlobalVisibleRect(hitRect)) {
             hitRect.inset(-slack, -slack)
             if (hitRect.contains(x, y)) return true
@@ -465,7 +480,6 @@ class NowPlayingActivity : AppCompatActivity() {
             hitRect.inset(-slack, -slack)
             if (hitRect.contains(x, y)) return true
         }
-        // Scrolling the lyrics/info card must not collapse the player
         if (lyricsVisible && binding.lyricsOverlay.getGlobalVisibleRect(hitRect) &&
             hitRect.contains(x, y)
         ) return true
@@ -537,7 +551,6 @@ class NowPlayingActivity : AppCompatActivity() {
         binding.playPauseButton.contentDescription = getString(
             if (isPlaying) R.string.cd_pause else R.string.cd_play
         )
-        // Apple Music signature spring artwork scale: 1.0f playing, 0.80f paused
         val scale = if (isPlaying) 1f else 0.80f
         val elev = (if (isPlaying) 28f else 8f) * resources.displayMetrics.density
         binding.art.elevation = elev

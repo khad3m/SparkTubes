@@ -31,6 +31,7 @@ import com.sparktube.app.ui.common.SkeletonPulse
 import com.sparktube.app.ui.common.VideoUiModel
 import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
+import com.sparktube.app.ui.ScrollsToTop
 import com.sparktube.app.ui.search.SearchActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Formatters
@@ -49,7 +50,7 @@ private data class Genre(val label: String, val query: String?, val top: Int, va
  * - "Top Songs" ranked chart rows with interactive ••• song action sheet
  * - "Browse by Category" Apple Music vibrant gradient cards
  */
-class MusicFragment : Fragment() {
+class MusicFragment : Fragment(), ScrollsToTop {
 
     private var _binding: FragmentMusicBinding? = null
     private val binding get() = _binding!!
@@ -73,6 +74,8 @@ class MusicFragment : Fragment() {
 
         binding.greeting.setText(greetingRes())
         binding.errorRetry.setOnClickListener { load() }
+        binding.swipe.setColorSchemeColors(requireContext().getColor(R.color.music_green))
+        binding.swipe.setOnRefreshListener { load(fromPull = true) }
         Motion.pressable(binding.favoritesButton, 0.97f)
         Motion.pressable(binding.downloadsButton, 0.97f)
         Motion.pressable(binding.searchButton, 0.98f)
@@ -144,26 +147,35 @@ class MusicFragment : Fragment() {
         NowPlayingActivity.start(requireContext())
     }
 
-    private fun load() {
+    private fun load(fromPull: Boolean = false) {
         loadJob?.cancel()
         val b = _binding ?: return
         loadJob = viewLifecycleOwner.lifecycleScope.launch {
             b.errorView.isVisible = false
-            showMusicSkeleton(b)
+            if (!fromPull) showMusicSkeleton(b)
             try {
                 val country = AppPrefs.countryOrDefault
                 val result = YtRepository.musicTrending(country)
                 val models = result.items.map { it.toUiModel() }
                 cachedModels = models
                 loadedCountry = country
-                clearMusicSkeleton(b)
-                bindTrending(b, models)
+                if (!fromPull) clearMusicSkeleton(b)
+                // The entrance moment plays only on a first load, never on refresh or tab return
+                bindTrending(b, models, animate = !fromPull)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                clearMusicSkeleton(b)
-                b.errorText.text = Formatters.friendlyException(e)
-                b.errorView.isVisible = true
+                if (fromPull && cachedModels.isNotEmpty()) {
+                    Toast.makeText(
+                        requireContext(), "Couldn't refresh. Check your connection.", Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    clearMusicSkeleton(b)
+                    b.errorText.text = Formatters.friendlyException(e)
+                    b.errorView.isVisible = true
+                }
+            } finally {
+                b.swipe.isRefreshing = false
             }
         }
     }
@@ -195,7 +207,7 @@ class MusicFragment : Fragment() {
         b.popularList.removeAllViews()
     }
 
-    private fun bindTrending(b: FragmentMusicBinding, models: List<VideoUiModel>) {
+    private fun bindTrending(b: FragmentMusicBinding, models: List<VideoUiModel>, animate: Boolean = false) {
         val hasItems = models.isNotEmpty()
         b.topPicksTitle.isVisible = hasItems
         b.topPicksScroller.isVisible = hasItems
@@ -205,7 +217,6 @@ class MusicFragment : Fragment() {
 
         // 1. Apple Music "Top Picks for You" Editorial Cards (first 4 items)
         b.topPicksRow.removeAllViews()
-        val badges = listOf("TOP PICK", "TRENDING", "POPULAR", "FEATURED")
         val tints = intArrayOf(
             0xFF2A0A12.toInt(),
             0xFF1C0F14.toInt(),
@@ -216,7 +227,6 @@ class MusicFragment : Fragment() {
             b.topPicksRow.addView(
                 buildEditorialCard(
                     model = model,
-                    superLabel = badges[idx % badges.size],
                     footerColor = tints[idx % tints.size]
                 )
             )
@@ -246,6 +256,9 @@ class MusicFragment : Fragment() {
             row.findViewById<TextView>(R.id.rank)?.apply {
                 text = (index + 1).toString()
                 isVisible = true
+                // keep the hairline divider aligned with the text, not the rank number
+                (row.findViewById<View>(R.id.divider)?.layoutParams as? ViewGroup.MarginLayoutParams)
+                    ?.let { it.marginStart += dp(26) }
             }
             row.findViewById<TextView>(R.id.title).text = model.title
             row.findViewById<TextView>(R.id.subtitle).text = model.uploader
@@ -259,16 +272,16 @@ class MusicFragment : Fragment() {
             b.popularList.addView(row)
         }
 
-        // Staggered entrance (skipped when animations are off in settings)
-        Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18).toFloat(), limit = 4)
-        Motion.enter(b.shelfRow.children.toList(), AppPrefs.animations, dp(14).toFloat(), limit = 6)
-        Motion.enter(b.popularList.children.toList(), AppPrefs.animations, dp(10).toFloat(), limit = 8)
+        // One orchestrated moment: the hero cards rise in on first load only.
+        // Everything else appears instantly so the screen never feels slow.
+        if (animate) {
+            Motion.enter(b.topPicksRow.children.toList(), AppPrefs.animations, dp(18), limit = 4)
+        }
     }
 
     /** Builds an authentic Apple Music tall editorial card (240dp x 300dp). */
     private fun buildEditorialCard(
         model: VideoUiModel,
-        superLabel: String,
         footerColor: Int
     ): View {
         val ctx = requireContext()
@@ -279,19 +292,9 @@ class MusicFragment : Fragment() {
             }
         }
 
-        val superText = TextView(ctx).apply {
-            text = superLabel
-            textSize = 11f
-            letterSpacing = 0.06f
-            setTextColor(Themes.onSurfaceVariantColor(ctx))
-            setTypeface(null, Typeface.BOLD)
-        }
-        container.addView(superText)
-
         val cardFrame = FrameLayout(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(236), dp(286)).apply {
-                topMargin = dp(6)
-            }
+            layoutParams = LinearLayout.LayoutParams(dp(236), dp(286))
+            contentDescription = "${model.title}, ${model.uploader}"
             background = GradientDrawable().apply {
                 cornerRadius = dp(16).toFloat()
                 setColor(footerColor)
@@ -434,7 +437,7 @@ class MusicFragment : Fragment() {
                 )
                 setOnClickListener {
                     if (genre.query == null) {
-                        binding.root.smoothScrollTo(0, 0)
+                        binding.scroll.smoothScrollTo(0, 0)
                         load()
                     } else {
                         startActivity(
@@ -454,6 +457,10 @@ class MusicFragment : Fragment() {
             }
             grid.addView(tile, params)
         }
+    }
+
+    override fun scrollToTop() {
+        _binding?.scroll?.smoothScrollTo(0, 0)
     }
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(

@@ -176,7 +176,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun select(id: Int) {
-        if (id == selectedId) return
+        if (id == selectedId) {
+            // Tapping the active tab again scrolls it to the top
+            (fragments[id] as? ScrollsToTop)?.scrollToTop()
+            return
+        }
         selectedId = id
         applySelection()
     }

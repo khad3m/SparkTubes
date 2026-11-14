@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- YouTube-app-style video card: 16:9 thumbnail with a duration badge,
-     then a round channel avatar beside a 2-line bold title and one
-     combined "Channel • views • time" meta line (the official app's
-     pattern), instead of three separate full-width stacked lines. -->
+<!-- Premium Glass Video Card: 16:9 rounded thumbnail with bottom vignette,
+     quick audio-listen badge, smoked-glass duration pill, and channel metadata row. -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content">
+    android:layout_height="wrap_content"
+    android:layout_marginTop="7dp"
+    android:layout_marginBottom="7dp"
+    android:background="@drawable/bg_video_card"
+    android:clickable="true"
+    android:focusable="true"
+    android:padding="10dp">
 
     <FrameLayout
         android:id="@+id/thumbWrap"
@@ -22,7 +26,47 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:scaleType="centerCrop"
-            app:shapeAppearanceOverlay="@style/RoundedThumb" />
+            app:shapeAppearanceOverlay="@style/RoundedThumbLg" />
+
+        <!-- Subtle bottom vignette for crisp badge contrast -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_gravity="bottom"
+            android:background="@drawable/bg_thumb_scrim" />
+
+        <!-- Upper-left quick Audio Play mini pill on card -->
+        <LinearLayout
+            android:id="@+id/cardAudioQuickBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_gravity="top|start"
+            android:layout_margin="8dp"
+            android:background="@drawable/bg_duration_glass"
+            android:clickable="true"
+            android:contentDescription="@string/switch_to_audio"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp">
+
+            <ImageView
+                android:layout_width="13dp"
+                android:layout_height="13dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_headset"
+                app:tint="@color/white" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="@string/switch_to_audio"
+                android:textColor="@color/white"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/duration"
@@ -30,20 +74,22 @@
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|end"
             android:layout_margin="8dp"
-            android:background="@drawable/bg_duration_badge"
-            android:paddingStart="5dp"
-            android:paddingTop="2dp"
-            android:paddingEnd="5dp"
-            android:paddingBottom="2dp"
+            android:background="@drawable/bg_duration_glass"
+            android:paddingStart="9dp"
+            android:paddingTop="3dp"
+            android:paddingEnd="9dp"
+            android:paddingBottom="3dp"
             android:textColor="@color/white"
-            android:textSize="11sp" />
+            android:textSize="11sp"
+            android:textStyle="bold" />
     </FrameLayout>
 
     <com.google.android.material.imageview.ShapeableImageView
         android:id="@+id/avatar"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
-        android:layout_marginTop="10dp"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:layout_marginStart="4dp"
+        android:layout_marginTop="11dp"
         android:scaleType="centerCrop"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/thumbWrap"
@@ -53,10 +99,12 @@
         android:id="@+id/title"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
+        android:layout_marginStart="11dp"
         android:layout_marginTop="10dp"
-        android:layout_marginEnd="4dp"
+        android:layout_marginEnd="6dp"
         android:ellipsize="end"
+        android:letterSpacing="-0.01"
+        android:lineSpacingExtra="1dp"
         android:maxLines="2"
         android:textColor="@color/on_surface"
         android:textSize="15sp"
@@ -70,9 +118,10 @@
         android:id="@+id/meta"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
-        android:layout_marginTop="2dp"
-        android:layout_marginBottom="14dp"
+        android:layout_marginStart="11dp"
+        android:layout_marginTop="3dp"
+        android:layout_marginEnd="6dp"
+        android:layout_marginBottom="4dp"
         android:ellipsize="end"
         android:maxLines="1"
         android:textColor="@color/on_surface_variant"

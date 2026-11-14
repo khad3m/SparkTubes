@@ -12,6 +12,7 @@ import com.sparktube.app.R
 import com.sparktube.app.data.Countries
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.FragmentMenuBinding
+import com.sparktube.app.ui.music.Motion
 import com.sparktube.app.util.AppPrefs
 import kotlinx.coroutines.launch
 
@@ -32,6 +33,15 @@ class MenuFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        Motion.pressable(binding.profileHeroCard, 0.98f)
+        Motion.pressable(binding.rowCountry, 0.96f)
+        Motion.pressable(binding.rowSettings, 0.96f)
+        Motion.pressable(binding.rowVideoSettings, 0.96f)
+        Motion.pressable(binding.rowMusicSettings, 0.96f)
+
+        binding.profileHeroCard.setOnClickListener {
+            SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)
+        }
         binding.rowCountry.setOnClickListener { showCountryPicker() }
         binding.rowSettings.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)

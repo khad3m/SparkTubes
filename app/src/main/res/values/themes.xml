@@ -109,9 +109,14 @@
         <item name="cornerSize">12dp</item>
     </style>
 
+    <style name="RoundedThumbLg" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">18dp</item>
+    </style>
+
     <style name="RoundedArt" parent="">
         <item name="cornerFamily">rounded</item>
-        <item name="cornerSize">20dp</item>
+        <item name="cornerSize">22dp</item>
     </style>
 
     <style name="RoundedArtSmall" parent="">
@@ -121,7 +126,7 @@
 
     <style name="CircleImage" parent="">
         <item name="cornerFamily">rounded</item>
-        <item name="cornerSize">20dp</item>
+        <item name="cornerSize">50%</item>
     </style>
 
     <style name="ActionPill">
@@ -133,10 +138,10 @@
         <item name="android:focusable">true</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:orientation">horizontal</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingTop">8dp</item>
-        <item name="android:paddingEnd">12dp</item>
-        <item name="android:paddingBottom">8dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingTop">9dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:paddingBottom">9dp</item>
     </style>
 
     <style name="ActionPillIcon">

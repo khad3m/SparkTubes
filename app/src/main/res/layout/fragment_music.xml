@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.swiperefreshlayout.widget.SwipeRefreshLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/swipe"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?attr/screenBg"
+    android:background="@drawable/bg_ambient">
+
+<androidx.core.widget.NestedScrollView
+    android:id="@+id/scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
     android:clipToPadding="false"
     android:scrollbars="none">
 
@@ -30,20 +36,9 @@
                 android:orientation="vertical">
 
                 <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:letterSpacing="0.08"
-                    android:text="SPARKTUBE MUSIC"
-                    android:textAllCaps="true"
-                    android:textColor="@color/music_green"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-
-                <TextView
                     android:id="@+id/greeting"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="1dp"
                     android:letterSpacing="-0.03"
                     android:text="@string/tab_music"
                     android:textColor="@color/on_surface"
@@ -53,11 +48,11 @@
 
             <FrameLayout
                 android:id="@+id/profileBadge"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_marginBottom="4dp"
-                android:background="@drawable/bg_glass_circle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="@drawable/bg_glass_circle_inset"
                 android:clickable="true"
+                android:contentDescription="Play music"
                 android:focusable="true">
 
                 <ImageView
@@ -74,7 +69,7 @@
         <LinearLayout
             android:id="@+id/searchButton"
             android:layout_width="match_parent"
-            android:layout_height="42dp"
+            android:layout_height="44dp"
             android:layout_marginStart="20dp"
             android:layout_marginTop="12dp"
             android:layout_marginEnd="20dp"
@@ -219,7 +214,7 @@
             <TextView
                 android:id="@+id/errorRetry"
                 android:layout_width="wrap_content"
-                android:layout_height="40dp"
+                android:layout_height="44dp"
                 android:layout_marginTop="14dp"
                 android:background="@drawable/bg_glass_card"
                 android:clickable="true"
@@ -228,7 +223,7 @@
                 android:paddingStart="24dp"
                 android:paddingEnd="24dp"
                 android:text="Try again"
-                android:textColor="@color/music_green"
+                android:textColor="@color/accent_text"
                 android:textSize="15sp"
                 android:textStyle="bold" />
         </LinearLayout>
@@ -342,9 +337,13 @@
                 android:layout_height="wrap_content"
                 android:clickable="true"
                 android:focusable="true"
-                android:padding="4dp"
+                android:gravity="center"
+                android:minWidth="44dp"
+                android:minHeight="44dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
                 android:text="Play All"
-                android:textColor="@color/music_green"
+                android:textColor="@color/accent_text"
                 android:textSize="15sp"
                 android:textStyle="bold" />
         </LinearLayout>
@@ -382,3 +381,4 @@
 
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>
+</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>

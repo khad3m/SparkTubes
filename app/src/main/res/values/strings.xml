@@ -17,10 +17,25 @@
     <string name="press_back_again">Press back again to exit</string>
 
     <!-- Home -->
-    <string name="search_hint">Search videos</string>
+    <string name="search_hint">Search videos, creators, music…</string>
     <string name="search_music_hint">Search songs</string>
     <string name="trending_in">Suggested in %1$s %2$s</string>
     <string name="crash_test_desc">Test crash</string>
+    <string name="chip_all">All</string>
+    <string name="chip_music">Music</string>
+    <string name="chip_gaming">Gaming</string>
+    <string name="chip_tech">Tech &amp; AI</string>
+    <string name="chip_podcasts">Podcasts</string>
+    <string name="chip_movies">Movies</string>
+
+    <!-- Profile / Settings Card Grid -->
+    <string name="profile_name">Md Khademul Islam</string>
+    <string name="profile_badge">PRO CREATOR · SPARKTUBE</string>
+    <string name="profile_subtitle">Premium Glass Edition · Anonymous Streaming</string>
+    <string name="switch_to_audio">Audio</string>
+    <string name="switch_to_video">Video</string>
+    <string name="switched_to_audio_player">Switched to Audio Player</string>
+    <string name="switched_to_video_player">Switched to Video Player</string>
 
     <!-- Library -->
     <string name="tab_history">History</string>
@@ -77,7 +92,7 @@
     <string name="quality_label">Video quality</string>
     <string name="subscribers_fmt">%1$s subscribers</string>
     <string name="views_fmt">%1$s views</string>
-    <string name="related_videos">Related</string>
+    <string name="related_videos">Up Next &amp; Related</string>
     <string name="subscribe">SUBSCRIBE</string>
     <string name="subscribed">SUBSCRIBED</string>
     <string name="subscribed_toast">Subscribed</string>

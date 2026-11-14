@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?attr/screenBg">
+    android:background="@drawable/bg_ambient">
 
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
@@ -14,16 +14,148 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
+        app:controller_layout_id="@layout/player_controller"
         app:resize_mode="fit"
+        app:show_timeout="3500"
         app:surface_type="texture_view"
         app:use_controller="true" />
+
+    <!-- Brightness / volume HUD (swipe left / right side of the video) -->
+    <LinearLayout
+        android:id="@+id/gestureHud"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:background="@drawable/bg_duration_glass"
+        android:elevation="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="14dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="10dp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="@id/playerView">
+
+        <ImageView
+            android:id="@+id/hudIcon"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_np_volume_high" />
+
+        <ProgressBar
+            android:id="@+id/hudBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="110dp"
+            android:layout_height="6dp"
+            android:layout_marginStart="10dp"
+            android:max="100"
+            android:progressDrawable="@drawable/np_scrubber" />
+
+        <TextView
+            android:id="@+id/hudText"
+            android:layout_width="38dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:gravity="end"
+            android:textColor="@color/white"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Upper-Left Dual Mini Buttons: [Music/Audio] & [Video] -->
+    <LinearLayout
+        android:id="@+id/topLeftModeSwitcher"
+        android:layout_width="wrap_content"
+        android:layout_height="38dp"
+        android:layout_marginStart="10dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_mode_switch_capsule"
+        android:elevation="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="3dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <!-- Mini Button 1: Music / Audio Player -->
+        <LinearLayout
+            android:id="@+id/miniMusicBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_mode_switch_inactive"
+            android:clickable="true"
+            android:contentDescription="@string/switch_to_audio"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp">
+
+            <ImageView
+                android:id="@+id/miniMusicIcon"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_headset"
+                app:tint="#CCFFFFFF" />
+
+            <TextView
+                android:id="@+id/miniMusicLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:text="@string/switch_to_audio"
+                android:textColor="#CCFFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Mini Button 2: Video Player (Active on Video Screen) -->
+        <LinearLayout
+            android:id="@+id/miniVideoBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_marginStart="2dp"
+            android:background="@drawable/bg_mode_switch_active"
+            android:clickable="true"
+            android:contentDescription="@string/switch_to_video"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp">
+
+            <ImageView
+                android:id="@+id/miniVideoIcon"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_video_cam"
+                app:tint="@color/white" />
+
+            <TextView
+                android:id="@+id/miniVideoLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:text="@string/switch_to_video"
+                android:textColor="@color/white"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
 
     <ImageButton
         android:id="@+id/backButton"
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:layout_marginStart="4dp"
-        android:background="@drawable/bg_icon_scrim"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:padding="12dp"
         android:contentDescription="@string/app_name"
         android:src="@drawable/ic_arrow_back"
         android:visibility="gone"
@@ -33,9 +165,10 @@
 
     <ImageButton
         android:id="@+id/fullscreenButton"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:background="@drawable/bg_icon_scrim"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:padding="12dp"
         android:contentDescription="@string/action_fullscreen"
         android:src="@drawable/ic_expand"
         app:layout_constraintEnd_toEndOf="parent"
@@ -44,9 +177,10 @@
 
     <ImageButton
         android:id="@+id/scaleButton"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:background="@drawable/bg_icon_scrim"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:padding="12dp"
         android:contentDescription="@string/action_scale_mode"
         android:src="@drawable/ic_tune"
         app:layout_constraintEnd_toStartOf="@id/fullscreenButton"
@@ -70,7 +204,7 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:paddingStart="16dp"
-            android:paddingTop="12dp"
+            android:paddingTop="14dp"
             android:paddingEnd="16dp">
 
             <TextView
@@ -78,9 +212,11 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
+                android:letterSpacing="-0.01"
+                android:lineSpacingExtra="2dp"
                 android:maxLines="2"
                 android:textColor="@color/on_surface"
-                android:textSize="18sp"
+                android:textSize="19sp"
                 android:textStyle="bold" />
 
             <!-- Views + date + foldable description (tap to expand / collapse). -->
@@ -93,7 +229,7 @@
                 android:clickable="true"
                 android:focusable="true"
                 android:orientation="vertical"
-                android:padding="12dp"
+                android:padding="14dp"
                 android:visibility="gone">
 
                 <LinearLayout
@@ -109,6 +245,21 @@
                         android:layout_weight="1"
                         android:textColor="@color/on_surface"
                         android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/qualityBadgeInfo"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:background="@drawable/bg_duration_glass"
+                        android:paddingStart="8dp"
+                        android:paddingTop="2dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="2dp"
+                        android:text="HD · AUDIO/VIDEO"
+                        android:textColor="?attr/accent"
+                        android:textSize="10sp"
                         android:textStyle="bold" />
 
                     <ImageView
@@ -127,6 +278,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:ellipsize="end"
+                    android:lineSpacingExtra="2dp"
                     android:maxLines="3"
                     android:textColor="@color/on_surface"
                     android:textSize="13sp" />
@@ -142,17 +294,23 @@
                     android:textStyle="bold" />
             </LinearLayout>
 
+            <!-- Premium Glass Channel Bar -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_card_soft"
                 android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="10dp">
 
                 <com.google.android.material.imageview.ShapeableImageView
                     android:id="@+id/channelAvatar"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
                     android:scaleType="centerCrop"
                     app:shapeAppearanceOverlay="@style/CircleImage" />
 
@@ -160,7 +318,7 @@
                     android:id="@+id/channelInfo"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
+                    android:layout_marginStart="12dp"
                     android:layout_weight="1"
                     android:orientation="vertical">
 
@@ -171,7 +329,7 @@
                         android:ellipsize="end"
                         android:singleLine="true"
                         android:textColor="@color/on_surface"
-                        android:textSize="14sp"
+                        android:textSize="15sp"
                         android:textStyle="bold" />
 
                     <TextView
@@ -188,16 +346,16 @@
                 <Button
                     android:id="@+id/subscribeButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="38dp"
                     android:background="@drawable/bg_subscribe_off"
                     android:gravity="center"
                     android:minWidth="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingEnd="16dp"
+                    android:paddingStart="18dp"
+                    android:paddingEnd="18dp"
                     android:text="@string/subscribe"
-                    android:textAllCaps="true"
+                    android:textAllCaps="false"
                     android:textColor="@color/white"
-                    android:textSize="12sp"
+                    android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
 
@@ -230,6 +388,36 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/actionBackground"
+                        style="@style/ActionPill">
+
+                        <ImageView
+                            style="@style/ActionPillIcon"
+                            android:src="@drawable/ic_headset"
+                            app:tint="?attr/accent" />
+
+                        <TextView
+                            style="@style/ActionPillText"
+                            android:text="@string/action_background" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/actionDownload"
+                        style="@style/ActionPill">
+
+                        <ImageView
+                            android:id="@+id/actionDownloadIcon"
+                            style="@style/ActionPillIcon"
+                            android:src="@drawable/ic_download"
+                            app:tint="@color/on_surface" />
+
+                        <TextView
+                            android:id="@+id/actionDownloadLabel"
+                            style="@style/ActionPillText"
+                            android:text="@string/action_download" />
+                    </LinearLayout>
+
+                    <LinearLayout
                         android:id="@+id/actionPlaylist"
                         style="@style/ActionPill">
 
@@ -258,36 +446,6 @@
                     </LinearLayout>
 
                     <LinearLayout
-                        android:id="@+id/actionDownload"
-                        style="@style/ActionPill">
-
-                        <ImageView
-                            android:id="@+id/actionDownloadIcon"
-                            style="@style/ActionPillIcon"
-                            android:src="@drawable/ic_download"
-                            app:tint="@color/on_surface" />
-
-                        <TextView
-                            android:id="@+id/actionDownloadLabel"
-                            style="@style/ActionPillText"
-                            android:text="@string/action_download" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:id="@+id/actionBackground"
-                        style="@style/ActionPill">
-
-                        <ImageView
-                            style="@style/ActionPillIcon"
-                            android:src="@drawable/ic_headset"
-                            app:tint="@color/on_surface" />
-
-                        <TextView
-                            style="@style/ActionPillText"
-                            android:text="@string/action_background" />
-                    </LinearLayout>
-
-                    <LinearLayout
                         android:id="@+id/actionPip"
                         style="@style/ActionPill">
 
@@ -308,12 +466,12 @@
                 android:id="@+id/commentsCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="12dp"
                 android:background="@drawable/bg_card_soft"
                 android:clickable="true"
                 android:focusable="true"
                 android:orientation="vertical"
-                android:padding="12dp"
+                android:padding="14dp"
                 android:visibility="gone">
 
                 <LinearLayout
@@ -327,7 +485,7 @@
                         android:layout_height="18dp"
                         android:importantForAccessibility="no"
                         android:src="@drawable/ic_chat_bubble"
-                        app:tint="@color/on_surface" />
+                        app:tint="?attr/accent" />
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -366,8 +524,8 @@
 
                     <com.google.android.material.imageview.ShapeableImageView
                         android:id="@+id/commentsPreviewAvatar"
-                        android:layout_width="26dp"
-                        android:layout_height="26dp"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
                         android:scaleType="centerCrop"
                         app:shapeAppearanceOverlay="@style/CircleImage" />
 
@@ -396,19 +554,20 @@
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:layout_marginTop="14dp"
-                android:layout_marginBottom="6dp"
-                android:alpha="0.5"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="8dp"
+                android:alpha="0.35"
                 android:background="@color/outline" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:layout_marginBottom="2dp"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="6dp"
+                android:letterSpacing="-0.01"
                 android:text="@string/related_videos"
                 android:textColor="@color/on_surface"
-                android:textSize="15sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <androidx.recyclerview.widget.RecyclerView

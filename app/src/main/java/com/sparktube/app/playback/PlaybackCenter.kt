@@ -214,47 +214,17 @@ object PlaybackCenter {
 
     // ----- Startup watchdog (auto quality downshift) -----
 
-    /**
-     * Big-video insurance. Bigger streams are exactly the ones whose bitrate
-     * outruns a slow / throttled connection, so "stuck on the loading spinner
-     * at the start, recovers after a while" was the steady state whenever the
-     * network could not feed 720p+. This watchdog watches the first seconds of
-     * every video: if the first frame does not appear in time, or the video
-     * stalls right after starting, it drops ONE quality tier and rebuilds the
-     * source (keeping the position mid-play) until playback actually flows.
-     */
     private var watchdogJob: Job? = null
     private var watchdogDownshifts = 0
-
-    /**
-     * Height the startup watchdog dropped the CURRENT video to. Kept apart
-     * from [selectedHeight] (the user's own pick) on purpose: a slow start
-     * on one video must not silently cap every following video — and, with
-     * playlists, the whole rest of the list — to the lower quality. Cleared
-     * whenever a new video starts resolving or the user picks a quality.
-     */
     private var downshiftHeight: Int? = null
 
     // ----- Adaptive (DASH) start -----
 
-    /** The source currently on the player is the adaptive one (see [DashSources]). */
     private var dashActive = false
-
-    /** The adaptive start failed / was too slow for THIS video: use plain progressive. */
     private var dashBlocked = false
-
-    /** When the current source was handed to the player (first-frame timing log). */
     private var sourceAppliedAt = 0L
 
-    /**
-     * Watchdog: ms without a first frame before dropping one quality tier.
-     * 10s (was 5s): a cold start pays one-off DNS / TCP / TLS / CDN costs
-     * that a warm re-open (manual quality switch, seek) does not, so 5s
-     * downshifted streams that would have started fine a moment later.
-     */
     private val STARTUP_LIMIT_MS = 10_000L
-
-    /** Watchdog: ms of a post-start stall before dropping one quality tier. */
     private val STALL_LIMIT_MS = 4_000L
 
     /** Items of the music playlist that have not been resolved yet. */
@@ -266,12 +236,6 @@ object PlaybackCenter {
 
     private var prefetchJob: Job? = null
 
-    /**
-     * App-side controller connection to PlaybackService. Media3 only shows
-     * (and keeps updating) the media notification while a MediaController is
-     * connected to the MediaSessionService, so the app itself must hold one
-     * open. Created on first playback, kept for the lifetime of the process.
-     */
     private var controllerFuture: ListenableFuture<MediaController>? = null
 
     @Volatile var mode: Mode = Mode.NONE
@@ -286,16 +250,9 @@ object PlaybackCenter {
     var radioMode: Boolean = false
         private set
 
-    /**
-     * True while the video queue is a fixed playlist ("Play all" or a video
-     * tapped inside a playlist): the queue is exactly the playlist — no
-     * related videos get appended — the next item always follows the
-     * current one, and an unplayable item is skipped instead of stopping.
-     */
     @Volatile var playlistMode: Boolean = false
         private set
 
-    /** True while an item's streams are being resolved (spinner state for late listeners). */
     @Volatile var isResolving: Boolean = false
         private set
     private var usedFallback = false
@@ -313,12 +270,6 @@ object PlaybackCenter {
 
     val selectedQualityHeight: Int? get() = selectedHeight
 
-    /**
-     * The quality actually in effect for [c]: an explicit gear-menu pick,
-     * otherwise the default-video-quality from settings (what [videoForSelection]
-     * really plays). Used by the gear menu so a settings default like 720p
-     * shows up as "720p" instead of "Auto".
-     */
     fun effectiveSelectedHeight(c: StreamCatalog): Int? {
         downshiftHeight?.let { return it }
         selectedHeight?.let { return it }
@@ -354,23 +305,9 @@ object PlaybackCenter {
         get() {
             check(this::appContext.isInitialized) { "PlaybackCenter.init() not called" }
             return playerRef ?: ExoPlayer.Builder(appContext)
-                // IMPORTANT: player.setMediaItems() (music playlist!) builds
-                // its MediaSources through this factory. Without it the
-                // player falls back to its own default data source chain,
-                // which cannot resolve the virtual sparktube:// queue URIs:
-                // every song fails with "MalformedURLException: unknown
-                // protocol: sparktube" and playback skips to the next track
-                // (which fails the same way).
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-                // Fast first frame WITHOUT the endless startup spinner on big
-                // videos: the start cushion only gates how much media must be
-                // buffered before playback begins, and a fat cushion (5s of a
-                // 720p+ stream is megabytes) on a slow-ramping connection kept
-                // the player "stuck" on the loading spinner for ages. 1s gets
-                // the first frame on screen fast; the STARTUP WATCHDOG below
-                // then watches the connection and auto-drops the quality when
-                // bandwidth can't keep up (stalls used to be papered over with
-                // a big cushion — now they actually get fixed).
+                .setSeekBackIncrementMs(10_000L)
+                .setSeekForwardIncrementMs(10_000L)
                 .setLoadControl(
                     DefaultLoadControl.Builder()
                         .setBufferDurationsMs(
@@ -404,8 +341,6 @@ object PlaybackCenter {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            // A playlist always continues to its next video (like YouTube);
-            // the autoplay setting only governs the related-videos queue.
             if (playbackState == Player.STATE_ENDED && mode == Mode.VIDEO &&
                 (playlistMode || AppPrefs.videoAutoplayNext)
             ) {
@@ -424,7 +359,6 @@ object PlaybackCenter {
                     resolveCatalog(entry)
                 }
             }
-            // Resolve the next songs in the background so transitions are instant.
             prefetchAhead()
         }
 
@@ -456,18 +390,10 @@ object PlaybackCenter {
     private fun ensureService() {
         if (controllerFuture != null) return
         try {
-            // A plain startService() is NOT enough: Media3 wires the session
-            // player into its notification manager inside addSession(),
-            // which only runs when a controller connects (onGetSession).
-            // Without this connection background music keeps playing in the
-            // app process but no notification - and so no shade / lockscreen
-            // controls - ever appears.
             val token =
                 SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java))
             val future = MediaController.Builder(appContext, token).buildAsync()
             controllerFuture = future
-            // If connecting failed for good, allow another try on the next
-            // playback instead of staying silent forever.
             future.addListener(
                 {
                     try {
@@ -479,7 +405,6 @@ object PlaybackCenter {
                 ContextCompat.getMainExecutor(appContext)
             )
         } catch (_: Exception) {
-            // e.g. binding not allowed right now: retried on next playback.
         }
     }
 
@@ -506,10 +431,7 @@ object PlaybackCenter {
     }
 
     /**
-     * Plays a fixed video playlist starting at [startIndex]. The whole list
-     * is the queue (previous / next work across it) and every video that
-     * finishes hands over to the next one; nothing else is mixed in.
-     * Downloaded videos in the list play from disk (offline-friendly).
+     * Plays a fixed video playlist starting at [startIndex].
      */
     fun playPlaylist(entries: List<QueueEntry>, startIndex: Int = 0) {
         initFromApp()
@@ -531,15 +453,12 @@ object PlaybackCenter {
     }
 
     /**
-     * Starts a fixed music playlist (favorites, downloads, …): exactly
-     * these songs play one after another — nothing else is ever mixed in.
+     * Starts a fixed music playlist (favorites, downloads, …).
      */
     fun playMusicQueue(entries: List<QueueEntry>, startIndex: Int = 0, allowRadio: Boolean = false) {
         initFromApp()
         if (entries.isEmpty()) return
         val start = startIndex.coerceIn(0, entries.size - 1)
-        // The player playlist is the tapped song + everything after it, so
-        // player indexes and queue indexes always match.
         val playlist = if (start == 0) entries else entries.drop(start)
         stopPlayerNow()
         mode = Mode.AUDIO
@@ -553,7 +472,6 @@ object PlaybackCenter {
         resolveJob = scope.launch {
             try {
                 val first = currentEntry ?: return@launch
-                // Downloaded files play straight from disk — no resolving.
                 if (first.url.startsWith("file://")) {
                     catalog = null
                     startMusicPlaylistWithRelated()
@@ -568,7 +486,6 @@ object PlaybackCenter {
                     catalog = StreamCatalog(info)
                     LocalStore.addToMusicHistory(appContext, first.toVideoEntry())
                     RecommendEngine.logPlay(appContext, first.url, first.title, first.uploader)
-                    // Prime the audio URL cache: the first song then starts instantly.
                     primeMusicUri(first)
                     startMusicPlaylistWithRelated()
                     ensureService()
@@ -588,11 +505,6 @@ object PlaybackCenter {
         }
     }
 
-    /**
-     * Jumps straight to a queue position — used by the music queue / radio
-     * picker so the user can choose what plays next instead of being stuck
-     * with the auto-generated order.
-     */
     fun playQueueIndex(index: Int) {
         if (index < 0 || index >= queue.size) return
         when (mode) {
@@ -661,8 +573,6 @@ object PlaybackCenter {
                 queueIndex--
                 resolveCurrent()
             } else {
-                // Already at the top of the queue: restart the video
-                // (matches the behavior of the built-in previous button).
                 seekTo(0)
             }
             Mode.NONE -> Unit
@@ -689,9 +599,6 @@ object PlaybackCenter {
 
     // ----- Quality / track selection -----
 
-    /**
-     * @param height null = auto (best available), -1 = audio only.
-     */
     fun setVideoQuality(height: Int?) {
         if (height == -1) {
             audioOnlyMode = true
@@ -700,13 +607,9 @@ object PlaybackCenter {
         } else {
             audioOnlyMode = false
             selectedHeight = height
-            // Explicit "Auto" beats the settings default for this session.
             autoPicked = height == null
         }
-        // Explicit user action: give adaptive streams another chance even
-        // if an earlier error had dropped us to a muxed fallback.
         usedFallback = false
-        // The user took manual control of quality — stop auto-downshifting.
         watchdogJob?.cancel()
         downshiftHeight = null
         rebuildSource(keepPosition = true)
@@ -715,9 +618,6 @@ object PlaybackCenter {
     fun setAudioTrack(trackId: String) {
         if (catalog?.audioTracks?.none { it.id == trackId } == true) return
         selectedAudioTrackId = trackId
-        // Rebuild from scratch so the selected dubbing language is actually
-        // used, even if an earlier error had switched us to a muxed stream
-        // (those always carry the default audio only).
         usedFallback = false
         rebuildSource(keepPosition = true)
         notify { it.onCatalogReady() }
@@ -736,6 +636,81 @@ object PlaybackCenter {
         audioOnlyMode = false
         rebuildSource(keepPosition = true)
         notify { it.onAudioOnlyChanged(false) }
+    }
+
+    // ----- Seamless Dual Upper-Left Audio <-> Video Mode Switching -----
+
+    /**
+     * Switches from the Video Player (PlayerActivity) directly into the Apple Music
+     * Audio Player (NowPlayingActivity) while preserving the current playback position.
+     */
+    fun switchToAudioPlayerMode() {
+        initFromApp()
+        val entry = currentEntry ?: return
+        val savedPos = positionMs
+        val wasPlaying = playerRef?.isPlaying ?: true
+        val existingCatalog = catalog
+
+        watchdogJob?.cancel()
+        mode = Mode.AUDIO
+        audioOnlyMode = true
+
+        if (existingCatalog != null) {
+            primeMusicUri(entry)
+            val source = buildSource(entry, existingCatalog)
+            if (source != null) {
+                player.run {
+                    setMediaSource(source, savedPos)
+                    prepare()
+                    playWhenReady = wasPlaying
+                    setPlaybackSpeed(playbackSpeed)
+                }
+                ensureService()
+                notify { it.onAudioOnlyChanged(true) }
+                notify { it.onItemChanged(entry) }
+                return
+            }
+        }
+        // Fallback if catalog wasn't resolved yet
+        playMusic(entry.copy(isMusic = true), radio = true)
+    }
+
+    /**
+     * Switches from the Audio Player (NowPlayingActivity) directly into the Video Player
+     * (PlayerActivity) while preserving the exact playback position.
+     */
+    fun switchToVideoPlayerMode() {
+        initFromApp()
+        val entry = currentEntry ?: return
+        val savedPos = positionMs
+        val wasPlaying = playerRef?.isPlaying ?: true
+        val existingCatalog = catalog
+
+        mode = Mode.VIDEO
+        audioOnlyMode = false
+        radioMode = false
+        if (selectedHeight == -1) selectedHeight = null
+
+        if (existingCatalog != null && existingCatalog.hasVideo) {
+            val source = buildSource(entry, existingCatalog)
+            if (source != null) {
+                sourceAppliedAt = SystemClock.elapsedRealtime()
+                player.run {
+                    setMediaSource(source, savedPos)
+                    prepare()
+                    playWhenReady = wasPlaying
+                    setPlaybackSpeed(playbackSpeed)
+                }
+                startStartupWatchdog()
+                ensureService()
+                notify { it.onAudioOnlyChanged(false) }
+                notify { it.onItemChanged(entry) }
+                notify { it.onCatalogReady() }
+                return
+            }
+        }
+        // Fallback: resolve full video stream if catalog was missing
+        playVideo(entry.copy(isMusic = false))
     }
 
     // ----- Favorites -----
@@ -786,7 +761,6 @@ object PlaybackCenter {
         ensureService()
     }
 
-    /** Prepares and starts the finished download's files on the player. False when none exist. */
     private fun startLocalFiles(record: DownloadRecord): Boolean {
         val sources = record.filePaths
             .filter { File(it).exists() }
@@ -806,7 +780,6 @@ object PlaybackCenter {
         return true
     }
 
-    /** A finished on-device video download of [url] whose files are all still there, if any. */
     private fun localVideoRecord(url: String): DownloadRecord? =
         DownloadCenter.recordsFor(appContext, url).firstOrNull { record ->
             record.status == DownloadCenter.STATUS_DONE &&
@@ -834,23 +807,15 @@ object PlaybackCenter {
     private fun resolveCurrent() {
         val entry = currentEntry ?: return
         resolveJob?.cancel()
-        // A previous video's startup watchdog must not act on this one, and
-        // its quality drop applies to that video only.
         watchdogJob?.cancel()
         downshiftHeight = null
         dashBlocked = false
         dashActive = false
-        // Drop the PREVIOUS video's catalog immediately: the watch page
-        // listens to onItemChanged and re-binds from the entry alone, so the
-        // action pills / subscribe / views of the old video must not linger
-        // (and must stay hidden) until the new catalog arrives.
         catalog = null
         notify { it.onItemChanged(currentEntry) }
         setResolving(true)
         resolveJob = scope.launch {
             try {
-                // Playlist videos with a finished download play from disk:
-                // no network needed, so an offline playlist keeps working.
                 val local = if (playlistMode) localVideoRecord(entry.url) else null
                 if (local != null && startLocalFiles(local)) {
                     notify { it.onItemChanged(currentEntry) }
@@ -872,11 +837,8 @@ object PlaybackCenter {
                 extendQueueFromRelated()
                 ensureService()
             } catch (e: CancellationException) {
-                // Superseded by a newer resolve: not an error for the user.
                 throw e
             } catch (e: Exception) {
-                // In a playlist an unavailable / live item is skipped so the
-                // rest of the list still plays.
                 if (!skipBrokenPlaylistItem()) {
                     if (e is LiveContentException) {
                         notify { it.onLiveContentBlocked() }
@@ -890,25 +852,15 @@ object PlaybackCenter {
         }
     }
 
-    /** Tracks + broadcasts "resolving" so a screen that attaches late can still show the spinner. */
     private fun setResolving(resolving: Boolean) {
         isResolving = resolving
         notify { it.onResolvingChanged(resolving) }
     }
 
-    /**
-     * Playlist playback: hops over an item that cannot play (removed video,
-     * live stream, hard playback error) so the list keeps going. Returns
-     * false when this is not a playlist or it was the last item — the caller
-     * then reports the error as usual.
-     */
     private fun skipBrokenPlaylistItem(): Boolean {
         if (!playlistMode || mode != Mode.VIDEO || queueIndex >= queue.size - 1) return false
         val failedIndex = queueIndex
         notify { it.onNotice("This video can't be played — skipping to the next one") }
-        // Posted rather than called inline: this can run inside the resolve
-        // coroutine that next() is about to cancel and replace. The index
-        // check drops the hop if the user already moved on by themselves.
         scope.launch(Dispatchers.Main) {
             if (mode == Mode.VIDEO && playlistMode && queueIndex == failedIndex) next()
         }
@@ -928,8 +880,6 @@ object PlaybackCenter {
                 catalog = StreamCatalog(info)
                 LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
                 RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
-                // Share the resolved URL with the loading thread (if it has
-                // not found it already) so a re-visit starts instantly.
                 primeMusicUri(entry)
                 notify { it.onItemChanged(currentEntry) }
                 notify { it.onCatalogReady() }
@@ -948,7 +898,6 @@ object PlaybackCenter {
         }
     }
 
-    /** Appends related items so next/previous + autoplay keep working (video mode). */
     private fun extendQueueFromRelated() {
         if (playlistMode) return
         val rel = catalog?.related ?: return
@@ -960,18 +909,10 @@ object PlaybackCenter {
         notify { it.onQueueChanged() }
     }
 
-    /**
-     * Grows the music playlist with related songs before it runs dry, so a
-     * radio is effectively endless. YouTube's "related" list alone only holds
-     * a couple of dozen items (and shrinks after de-duplication), so when it
-     * cannot fill the queue a song search for the same artist tops it up.
-     */
     private fun extendRadioFromRelated() {
         val rel = catalog?.related ?: return
         val idx = playerRef?.currentMediaItemIndex ?: queueIndex
         val remaining = (queue.size - idx - 1).coerceAtLeast(0)
-        // Only extend when the upcoming part of the queue is running low,
-        // otherwise the playlist would grow without bound.
         if (remaining >= RADIO_REFILL_BELOW) return
         val known = queue.map { it.url }.toSet()
         val additions = rel.filter { it.url.isNotBlank() && it.url !in known && !LiveFilter.isLive(it) }
@@ -993,7 +934,6 @@ object PlaybackCenter {
         notify { it.onQueueChanged() }
     }
 
-    /** Fallback source for the radio: more songs by the same artist. */
     private fun topUpRadioFromSearch(seed: QueueEntry?) {
         seed ?: return
         val query = seed.uploader.removeSuffix(" - Topic").ifBlank { seed.title }
@@ -1001,7 +941,6 @@ object PlaybackCenter {
         scope.launch {
             try {
                 val result = YtRepository.searchMusic(query, null)
-                // The radio may have been restarted / stopped meanwhile.
                 if (!radioMode || currentEntry?.url != seed.url) return@launch
                 val known = queue.map { it.url }.toSet()
                 val more = result.items
@@ -1012,7 +951,6 @@ object PlaybackCenter {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Best-effort only: the related list keeps the radio going.
             }
         }
     }
@@ -1021,24 +959,15 @@ object PlaybackCenter {
         if (queueIndex < queue.size - 1) {
             next()
         }
-        // Queue exhausted: radio already keeps extending while playing.
     }
 
     private fun onPlayerFailed(error: PlaybackException) {
-        // A live URL slipping through data-source resolution (sparktube://
-        // queue lookups run on the loader thread, not through the
-        // resolveCatalog()/playMusicQueue() try/catch above) surfaces here
-        // instead, wrapped as the PlaybackException's cause. Checked lazily
-        // (not returned early) so the existing skip-to-next-song / skip-
-        // broken-playlist-item behavior below still runs first, exactly as
-        // it did before live content had its own exception type.
         val isLive = generateSequence(error as Throwable) { it.cause }
             .any { it is LiveContentException }
         fun notifyFailure() {
             if (isLive) notify { it.onLiveContentBlocked() }
             else notify { it.onError("Playback error: ${error.errorCodeName}") }
         }
-        // Music mode: skip a broken song so the radio keeps going.
         if (mode == Mode.AUDIO) {
             playerRef?.run {
                 if (hasNextMediaItem()) {
@@ -1055,16 +984,12 @@ object PlaybackCenter {
             }
             return
         }
-        // The adaptive (DASH) session failed: retry the same video on the plain
-        // progressive path before any other fallback.
         if (dashActive) {
             dashBlocked = true
             android.util.Log.w("SparkTubeStartup", "adaptive source failed: ${error.errorCodeName}")
             rebuildSource(keepPosition = true)
             return
         }
-        // The selected dubbing track failed to load: retry once with the
-        // default audio before giving up on adaptive streams.
         if (selectedAudioTrackId != null && !usedFallback) {
             selectedAudioTrackId = null
             notify { it.onNotice("Selected audio track unavailable - using the default track") }
@@ -1072,10 +997,8 @@ object PlaybackCenter {
             notify { it.onCatalogReady() }
             return
         }
-        // If a high-quality merged source failed, fall back to the best muxed stream.
         if (!usedFallback && c.muxed.isNotEmpty()) {
             usedFallback = true
-            // A muxed stream always carries the default audio only.
             val hadTrackChoice = selectedAudioTrackId != null
             selectedAudioTrackId = null
             if (hadTrackChoice) {
@@ -1089,7 +1012,6 @@ object PlaybackCenter {
         notifyFailure()
     }
 
-    /** Builds and applies the media source for the current entry + selections (video mode). */
     private fun applySources(speed: Float) {
         val entry = currentEntry ?: return
         val c = catalog ?: return
@@ -1107,14 +1029,7 @@ object PlaybackCenter {
         startStartupWatchdog()
     }
 
-    /**
-     * Watches the freshly prepared video: [STARTUP_LIMIT_MS] without a first
-     * frame, or a [STALL_LIMIT_MS] stall during the first healthy stretch,
-     * drops one quality tier via [downshiftOneTier]. Retires itself once the
-     * connection has proven it can sustain the current quality.
-     */
     private fun startStartupWatchdog() {
-        // Local files and background audio have no video bitrate to manage.
         if (mode != Mode.VIDEO || audioOnlyMode) return
         watchdogJob?.cancel()
         watchdogDownshifts = 0
@@ -1137,7 +1052,6 @@ object PlaybackCenter {
                         if (p.isPlaying) {
                             stallSince = 0L
                             healthyMs += dt
-                            // Connection proven: 15s of uninterrupted playback.
                             if (healthyMs >= 15_000) return@launch
                         }
                     }
@@ -1149,9 +1063,6 @@ object PlaybackCenter {
                         else if (dashActive) STALL_LIMIT_MS * 3 else STALL_LIMIT_MS
                         if (waited >= limit) {
                             if (dashActive) {
-                                // The adaptive start did not deliver either: fall
-                                // back to the plain stream (which the tier
-                                // downshifts below can then still tune).
                                 dashBlocked = true
                                 rebuildSource(keepPosition = !startup)
                                 preparedAt = SystemClock.elapsedRealtime()
@@ -1160,7 +1071,6 @@ object PlaybackCenter {
                                 stallSince = 0L
                                 continue
                             }
-                            // Floor reached / out of shifts: stop watching.
                             if (!downshiftOneTier(keepPosition = !startup)) return@launch
                             preparedAt = SystemClock.elapsedRealtime()
                             readyAt = 0L
@@ -1173,16 +1083,10 @@ object PlaybackCenter {
         }
     }
 
-    /**
-     * Drops the video to the next lower available height (video-only or
-     * muxed). Returns false when already at the floor / out of shifts, which
-     * retires the watchdog — there is nothing left to try.
-     */
     private fun downshiftOneTier(keepPosition: Boolean): Boolean {
         if (watchdogDownshifts >= 2) return false
         val c = catalog ?: return false
         val current = effectiveSelectedHeight(c) ?: run {
-            // "Auto": the top video-only stream is what is playing.
             c.videoOnly.firstOrNull()?.effectiveHeight() ?: c.muxed.firstOrNull()?.effectiveHeight()
         } ?: return false
         val lower = (c.videoOnly.map { it.effectiveHeight() } +
@@ -1192,11 +1096,7 @@ object PlaybackCenter {
             .sortedDescending()
         if (lower.isEmpty()) return false
         val target = lower.first()
-        // Only THIS video is dropped; the user's own pick / settings default
-        // stay untouched for the next video.
         downshiftHeight = target
-        // Honor the explicit height even if an earlier error had forced the
-        // muxed fallback (a failure here just re-triggers that fallback).
         usedFallback = false
         watchdogDownshifts++
         rebuildSource(keepPosition = keepPosition)
@@ -1242,15 +1142,8 @@ object PlaybackCenter {
             return null
         }
 
-        // Video mode: prefer an adaptive video-only stream merged with audio
-        // (that's how qualities above 360p are supported).
         val audio = audioForSelection(c)
 
-        // "Auto" / the settings default: start like the official player — an
-        // adaptive DASH session that begins with small segments at a quality the
-        // line can carry and adapts per segment. An explicit quality pick, a
-        // failed / slow adaptive start, or a manifest we cannot build all use the
-        // plain progressive path below, exactly as before.
         if (adaptiveEligible()) {
             val capHeight = if (autoPicked) 0 else AppPrefs.defaultVideoHeightNow(appContext)
             val mediaItem = MediaItem.Builder()
@@ -1289,7 +1182,6 @@ object PlaybackCenter {
         AppPrefs.smartStreaming && !dashBlocked && !usedFallback &&
             selectedHeight == null && downshiftHeight == null
 
-    /** Adaptive quality ceiling (0 = none). Cleared for fixed-quality progressive playback. */
     private fun applyVideoCap(capHeight: Int) {
         val p = playerRef ?: player
         val builder = p.trackSelectionParameters.buildUpon()
@@ -1305,8 +1197,6 @@ object PlaybackCenter {
             height == null -> {
                 val default = AppPrefs.defaultVideoHeightNow(appContext)
                 if (default > 0 && !autoPicked) {
-                    // User default: the chosen quality, or the best one below
-                    // it when the exact height is not available.
                     val candidates = c.videoOnly.ifEmpty { c.muxed }
                     candidates.filter { it.effectiveHeight() <= default }
                         .maxByOrNull { it.effectiveHeight() }
@@ -1332,7 +1222,6 @@ object PlaybackCenter {
         }
     }
 
-    /** Picks the default audio track's stream at the user's music quality tier. */
     private fun pickMusicAudio(c: StreamCatalog): AudioStream? {
         val group = c.audioTracks.firstOrNull() ?: return null
         val streams = group.streams.filter { it.isUrl && it.averageBitrate > 0 }
@@ -1352,13 +1241,6 @@ object PlaybackCenter {
 
     // ----- Music playlist -----
 
-    /**
-     * Builds the lazy-resolving playlist on the player: the current song
-     * plus (in radio mode) a first batch of related songs so next / previous
-     * and the notification controls exist from the very first moment. Each
-     * item uses a virtual sparktube:// URI that the resolving data source
-     * swaps for the real audio stream URL right before it is opened.
-     */
     private fun startMusicPlaylistWithRelated() {
         val first = currentEntry ?: return
         val items = mutableListOf(musicMediaItem(first))
@@ -1375,7 +1257,6 @@ object PlaybackCenter {
                 }
             notify { it.onQueueChanged() }
         } else {
-            // Fixed playlist (favorites / downloads): queue the whole list.
             queue.drop(1).forEach { items.add(musicMediaItem(it)) }
         }
         player.run {
@@ -1385,7 +1266,6 @@ object PlaybackCenter {
             setPlaybackSpeed(playbackSpeed)
             applyMusicAutoplay()
         }
-        // "Related" alone rarely fills a radio: top it up with the artist's songs.
         if (radioMode && items.size < RADIO_MIN_UPCOMING) {
             topUpRadioFromSearch(first)
         }
@@ -1397,7 +1277,6 @@ object PlaybackCenter {
             .setArtist(entry.uploader)
             .setArtworkUri(entry.thumbnailUrl.takeIf { it.isNotBlank() }?.let(Uri::parse))
             .build()
-        // Downloaded songs play straight from disk.
         if (entry.url.startsWith("file://")) {
             return MediaItem.Builder()
                 .setUri(Uri.parse(entry.url))
@@ -1405,9 +1284,6 @@ object PlaybackCenter {
                 .build()
         }
         val key = "music-${musicItemId.incrementAndGet()}"
-        // Bounded like musicUriCache: entries now live for the whole session
-        // (see resolveMusicUri) instead of being removed after first use, so
-        // a very long continuous radio session must not leak indefinitely.
         if (pendingMusic.size > 128) pendingMusic.clear()
         pendingMusic[key] = entry
         return MediaItem.Builder()
@@ -1416,21 +1292,9 @@ object PlaybackCenter {
             .build()
     }
 
-    /**
-     * Blocking stream resolution for the playlist (runs on the loading thread).
-     * ExoPlayer's ResolvingDataSource can call this more than once for the
-     * same media item — a mid-buffer retry, a re-open after a seek, etc. —
-     * so the pendingMusic entry must stay around for the life of the
-     * playlist item, not just the first successful resolution. Removing it
-     * eagerly made every repeat call throw "vanished", which the player
-     * treated as a hard playback error and skipped to the next track (which
-     * then hit the same problem a few seconds later).
-     */
     private fun resolveMusicUri(key: String): Uri {
         val entry = pendingMusic[key]
             ?: throw IOException("Playlist item vanished: $key")
-        // Fast path: already resolved (also covers repeat calls for the
-        // same item — retries, buffering re-opens, etc).
         musicUriCache[entry.url]?.let { return it }
         val info = runBlocking { YtRepository.streamInfo(entry.url) }
         if (LiveFilter.isLive(info)) {
@@ -1441,7 +1305,6 @@ object PlaybackCenter {
         return cacheMusicUri(entry.url, audio.content)
     }
 
-    /** Caches the resolved audio URL (bounded: a long session must not leak entries). */
     private fun cacheMusicUri(url: String, content: String): Uri {
         if (musicUriCache.size > 64) musicUriCache.clear()
         val uri = Uri.parse(content)
@@ -1449,13 +1312,11 @@ object PlaybackCenter {
         return uri
     }
 
-    /** Stores the selected-quality audio URL of the current catalog for [entry]. */
     private fun primeMusicUri(entry: QueueEntry) {
         val best = catalog?.let { pickMusicAudio(it) } ?: return
         cacheMusicUri(entry.url, best.content)
     }
 
-    /** Resolves the next couple of songs in the background so transitions are instant. */
     private fun prefetchAhead() {
         if (mode != Mode.AUDIO) return
         val idx = playerRef?.currentMediaItemIndex ?: queueIndex
@@ -1492,35 +1353,13 @@ object PlaybackCenter {
                 forceInitialRangeHeader(dataSpec)
             }
         }
-        // MULTI-THREADED PLAYBACK: a single connection ramps too slowly for
-        // 720p/1080p videos — the startup buffer could not fill in time, so
-        // big videos sat on the spinner and tripped the "Slow connection"
-        // watchdog while small videos started instantly. ParallelRangeDataSource
-        // splits every stream into ~1 MiB chunks and pulls 4 of them over
-        // parallel HTTP Range connections (the exact trick DownloadCenter
-        // uses, which googlevideo demonstrably supports), serving bytes to
-        // the player the moment they land. Any server/transfer hiccup degrades
-        // to one plain connection at the player's current byte — never any
-        // skipped or duplicated data.
         val parallel = ParallelRangeDataSource.Factory(resolving)
         DefaultDataSource.Factory(appContext, parallel)
     }
 
-    /**
-     * YouTube (googlevideo) serves the *first* open of a progressive stream
-     * (no Range header: position 0 + unknown length) from a throttled path,
-     * which is why videos took ages to start while a seek (which always sends
-     * a Range header) started instantly. Forcing `Range: bytes=0-` on that
-     * initial open puts it on the same fast path a seek uses. Seeks and
-     * re-opens (position != 0) are untouched: DefaultHttpDataSource computes
-     * and overrides its own Range header for them after applying our
-     * httpRequestHeaders, so this can never corrupt a real range request.
-     */
     private fun forceInitialRangeHeader(spec: DataSpec): DataSpec {
         val scheme = spec.uri.scheme
         if (scheme != "http" && scheme != "https") return spec
-        // C.LENGTH_UNSET is an int constant (media3) while DataSpec.length is
-        // a long - Kotlin needs the explicit widening conversion.
         if (spec.position != 0L || spec.length != C.LENGTH_UNSET.toLong()) return spec
         if (spec.httpRequestHeaders.containsKey("Range")) return spec
         val headers = HashMap(spec.httpRequestHeaders)
@@ -1530,16 +1369,6 @@ object PlaybackCenter {
 
     // ----- View attach helpers -----
 
-    /**
-     * Player-side wrapper handed to [PlayerView] so the controller's next /
-     * previous buttons reflect the APP queue (related videos, radio playlist)
-     * instead of the ExoPlayer playlist — video mode plays one MediaSource at
-     * a time, so without this the next button was permanently grayed out.
-     *
-     * NOTE: nested classes inside an `object` cannot use the `inner` modifier
-     * (Kotlin rejects it), so they reach the singleton's state through
-     * qualified access — same pattern as DownloadCenter.DownloadJob.
-     */
     @OptIn(UnstableApi::class)
     private class QueueForwardingPlayer(player: ExoPlayer) :
         ForwardingPlayer(player) {
@@ -1576,7 +1405,6 @@ object PlaybackCenter {
         }
     }
 
-    /** The wrapper for the currently attached PlayerView + the raw player it wraps. */
     private var forwardingPlayer: QueueForwardingPlayer? = null
     private var forwardingFor: ExoPlayer? = null
 

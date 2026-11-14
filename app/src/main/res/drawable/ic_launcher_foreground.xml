@@ -1,9 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- play mark -->
+    <path android:pathData="M49.00,34.80 Q41.00,30.00 41.00,39.60 L41.00,68.40 Q41.00,78.00 49.00,73.20 L73.00,58.80 Q81.00,54.00 73.00,49.20 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endColor="#C4001D"
+                android:endX="81"
+                android:endY="78"
+                android:startColor="#FF4560"
+                android:startX="41"
+                android:startY="30"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+    <!-- glass hairline on the mark -->
+    <path
+        android:pathData="M49.00,34.80 Q41.00,30.00 41.00,39.60 L41.00,68.40 Q41.00,78.00 49.00,73.20 L73.00,58.80 Q81.00,54.00 73.00,49.20 Z"
+        android:strokeWidth="0.7"
+        android:strokeColor="#59FFFFFF" />
+    <!-- spark -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M46,32L46,76L82,54Z"/>
+        android:pathData="M72.0,28.5 Q73.36,35.64 80.5,37.0 Q73.36,38.36 72.0,45.5 Q70.64,38.36 63.5,37.0 Q70.64,35.64 72.0,28.5 Z" />
 </vector>

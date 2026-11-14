@@ -4,7 +4,12 @@
     <color name="glass_top">#D9FFFFFF</color>
     <color name="glass_bottom">#8CFFFFFF</color>
     <color name="glass_stroke">#1F000000</color>
+    <color name="nav_glass_top">#F2FFFFFF</color>
+    <color name="nav_glass_bottom">#D9F5F5F7</color>
     <color name="glass_sheet">#F2FFFFFF</color>
+    <!-- Accent for small text: passes 4.5:1 on light surfaces (plain #FF0033 is ~4:1) -->
+    <color name="accent_text">#D70028</color>
+    <color name="np_accent_text">#FF6B81</color>
     <color name="yt_red">#FF0033</color>
     <color name="yt_red_deep">#B3001F</color>
 </resources>

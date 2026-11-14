@@ -87,17 +87,18 @@
 
         <ImageButton
             android:id="@+id/miniPlayPause"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@drawable/bg_glass_circle_inset"
+            android:padding="10dp"
             android:contentDescription="@string/now_playing"
             android:src="@drawable/ic_play_arrow"
             app:tint="@color/on_surface" />
 
         <ImageButton
             android:id="@+id/miniClose"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/app_name"
             android:src="@drawable/ic_close"

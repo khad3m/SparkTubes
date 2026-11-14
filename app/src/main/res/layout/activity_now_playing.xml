@@ -6,19 +6,101 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_nowplaying_bg">
 
-    <!-- Apple Music Top Grab Handle Pill + Dismiss Area -->
+    <!-- Apple Music Top Grab Handle Pill + Upper-Left Dual Mode Switcher -->
     <FrameLayout
         android:id="@+id/topGrabContainer"
         android:layout_width="match_parent"
-        android:layout_height="38dp"
+        android:layout_height="56dp"
+        android:paddingTop="6dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
+        <!-- Upper-Left Dual Mini Buttons: [Music/Audio (Active)] & [Video] -->
+        <LinearLayout
+            android:id="@+id/topLeftModeSwitcher"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="16dp"
+            android:background="@drawable/bg_mode_switch_capsule"
+            android:elevation="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="3dp">
+
+            <!-- Mini Button 1: Music / Audio (Active in NowPlayingActivity) -->
+            <LinearLayout
+                android:id="@+id/miniMusicBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_mode_switch_active"
+                android:clickable="true"
+                android:contentDescription="@string/switch_to_audio"
+                android:focusable="true"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
+
+                <ImageView
+                    android:id="@+id/miniMusicIcon"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_headset"
+                    app:tint="@color/white" />
+
+                <TextView
+                    android:id="@+id/miniMusicLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="5dp"
+                    android:text="@string/switch_to_audio"
+                    android:textColor="@color/white"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!-- Mini Button 2: Video (Tap to switch to Video Player) -->
+            <LinearLayout
+                android:id="@+id/miniVideoBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_marginStart="2dp"
+                android:background="@drawable/bg_mode_switch_inactive"
+                android:clickable="true"
+                android:contentDescription="@string/switch_to_video"
+                android:focusable="true"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
+
+                <ImageView
+                    android:id="@+id/miniVideoIcon"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_video_cam"
+                    app:tint="#CCFFFFFF" />
+
+                <TextView
+                    android:id="@+id/miniVideoLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="5dp"
+                    android:text="@string/switch_to_video"
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
         <ImageButton
             android:id="@+id/backButton"
             android:layout_width="64dp"
-            android:layout_height="36dp"
+            android:layout_height="44dp"
             android:layout_gravity="center"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/cd_back"
@@ -30,7 +112,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="end|center_vertical"
-            android:layout_marginEnd="28dp"
+            android:layout_marginEnd="20dp"
             android:alpha="0.7"
             android:letterSpacing="0.06"
             android:text="@string/now_playing"
@@ -135,24 +217,24 @@
 
             <ImageButton
                 android:id="@+id/favoriteButton"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
-                android:layout_marginStart="10dp"
-                android:background="@drawable/bg_np_glass_circle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_np_glass_circle_inset"
                 android:contentDescription="@string/action_favorite"
-                android:padding="7dp"
+                android:padding="12dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_favorite_border"
                 app:tint="@color/white" />
 
             <ImageButton
                 android:id="@+id/moreOptionsButton"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/bg_np_glass_circle"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="2dp"
+                android:background="@drawable/bg_np_glass_circle_inset"
                 android:contentDescription="More options"
-                android:padding="7dp"
+                android:padding="12dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_np_more"
                 app:tint="@color/white" />
@@ -161,6 +243,7 @@
         <!-- Apple Music Progress Scrubber -->
         <SeekBar
             android:id="@+id/seekBar"
+            android:contentDescription="Playback position"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
@@ -174,7 +257,7 @@
             android:splitTrack="false"
             android:thumb="@null" />
 
-        <!-- Elapsed · Lossless Badge · Remaining -->
+        <!-- Elapsed · Remaining -->
         <LinearLayout
             android:id="@+id/timeRow"
             android:layout_width="match_parent"
@@ -190,21 +273,6 @@
                 android:text="0:00"
                 android:textColor="#99FFFFFF"
                 android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/losslessBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_np_glass_pill"
-                android:letterSpacing="0.06"
-                android:paddingStart="8dp"
-                android:paddingTop="2dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="2dp"
-                android:text="AUDIO"
-                android:textColor="#CCFFFFFF"
-                android:textSize="9sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -283,6 +351,7 @@
 
             <SeekBar
                 android:id="@+id/volumeSeekBar"
+                android:contentDescription="Volume"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="12dp"
@@ -401,11 +470,10 @@
                     android:id="@+id/upNextLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:letterSpacing="0.06"
                     android:text="@string/up_next_label"
-                    android:textAllCaps="true"
-                    android:textColor="@color/music_green"
-                    android:textSize="10sp"
+                    android:textAllCaps="false"
+                    android:textColor="@color/np_accent_text"
+                    android:textSize="12sp"
                     android:textStyle="bold" />
 
                 <TextView
