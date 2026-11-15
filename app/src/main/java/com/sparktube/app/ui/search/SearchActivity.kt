@@ -63,7 +63,7 @@ class SearchActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySearchBinding
     private var musicMode: Boolean = false
     private var prefillQuery: String? = null
-    private lateinit var miniBar: com.sparktube.app.ui.common.MiniPlayerBar
+    private var miniBar: com.sparktube.app.ui.common.MiniPlayerBar? = null
 
     private lateinit var videoAdapter: VideoAdapter
     private lateinit var channelAdapter: ChannelRowAdapter
@@ -169,9 +169,13 @@ class SearchActivity : AppCompatActivity() {
 
         // Floating mini player above the results (v1.7.0): appears whenever
         // something is playing, same as the bar above the home-screen navbar.
-        miniBar = com.sparktube.app.ui.common.MiniPlayerBar(binding.miniBarInclude.root) {
-            com.sparktube.app.ui.player.PlayerActivity.startResume(this)
-        }
+        // v1.7.1: fully isolated — if anything in the bar wiring fails on a
+        // given device, Search keeps working without the bar.
+        miniBar = runCatching {
+            com.sparktube.app.ui.common.MiniPlayerBar(binding.miniBarInclude.root) {
+                com.sparktube.app.ui.player.PlayerActivity.startResume(this)
+            }
+        }.getOrNull()
 
         binding.searchInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
@@ -222,12 +226,12 @@ class SearchActivity : AppCompatActivity() {
         super.onResume()
         // A theme / accent change while we were in the background.
         Themes.recreateIfNeeded(this)
-        miniBar.start()
+        miniBar?.start()
     }
 
     override fun onPause() {
         super.onPause()
-        miniBar.stop()
+        miniBar?.stop()
     }
 
     // ----- Tabs + date filter -----
@@ -333,6 +337,9 @@ class SearchActivity : AppCompatActivity() {
                     getString(R.string.playlist_play_video),
                     getString(R.string.playlist_play_audio)
                 )
+                // v1.7.1: never show a dialog from a background completion when
+                // the activity is already gone (BadTokenException guard).
+                if (isFinishing || isDestroyed) return@launch
                 AlertDialog.Builder(this@SearchActivity)
                     .setTitle(playlist.title)
                     .setItems(choices) { dialog, which ->
@@ -476,15 +483,25 @@ class SearchActivity : AppCompatActivity() {
                         finishSearch(playlistItems.isNotEmpty(), noResultsEmpty)
                     }
                     tab == SearchTab.SHORTS -> {
-                        // Shorts search: short-form clips (≤ 3 minutes) from the
-                        // video search, filtered client-side (v1.7.0).
-                        val result = YtRepository.searchVideos(query, null)
+                        // Shorts search (v1.7.1): real shorts rows from the
+                        // InnerTube shorts endpoints — country-aware and
+                        // personalized for the signed-in account.
+                        val shorts = YtRepository.searchShorts(query)
                         items.clear()
                         items.addAll(
-                            result.items.map { it.toUiModel() }
-                                .filter { it.durationSec in 1L..180L }
+                            shorts.map { item ->
+                                VideoUiModel(
+                                    url = "https://www.youtube.com/watch?v=${item.videoId}",
+                                    title = item.title,
+                                    uploader = item.uploader,
+                                    thumbnailUrl = item.thumbnailUrl,
+                                    durationSec = 0L,
+                                    viewCount = 0L,
+                                    uploadDate = ""
+                                )
+                            }
                         )
-                        page = result.nextPage
+                        page = null
                         applyListAdapter()
                         videoAdapter.submitList(items.toList())
                         finishSearch(items.isNotEmpty(), noResultsEmpty)
@@ -577,14 +594,8 @@ class SearchActivity : AppCompatActivity() {
                         playlistAdapter.submitList(playlistItems.toList())
                     }
                     tab == SearchTab.SHORTS -> {
-                        val result = YtRepository.searchVideos(query, nextPage)
-                        val known = items.map { it.url }.toSet()
-                        items.addAll(
-                            result.items.map { it.toUiModel() }
-                                .filter { it.url !in known && it.durationSec in 1L..180L }
-                        )
-                        page = result.nextPage
-                        videoAdapter.submitList(items.toList())
+                        // Shorts rows come from a single page (no token) — the
+                        // scroll listener never triggers because page is null.
                     }
                     else -> {
                         val result = YtRepository.searchVideos(query, nextPage)

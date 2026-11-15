@@ -95,17 +95,46 @@ class ShortsActivity : AppCompatActivity() {
         }
     }
 
-    /** Trending first (shorts only), topped up with a search when too few. */
+    /**
+     * Shorts / Reels feed (v1.7.1), in priority order:
+     *  1. InnerTube shorts feed — country-preference aware, and PERSONALIZED
+     *     for the logged-in Google account (session cookies are attached).
+     *  2. Trending items filtered to ≤ 3 minutes.
+     *  3. A search top-up so the screen is never empty.
+     */
     private suspend fun fetchShorts(): List<com.sparktube.app.ui.common.VideoUiModel> {
         val out = LinkedHashMap<String, com.sparktube.app.ui.common.VideoUiModel>()
+
+        // 1) Real shorts feed (country + account personalization)
         runCatching {
-            YtRepository.trending(AppPrefs.countryOrDefault)
-        }.getOrDefault(emptyList())
-            .filter { it.duration in 1L..180L }
-            .forEach { item ->
-                val model = item.toUiModel()
-                if (model.url.isNotBlank()) out[model.url] = model
-            }
+            YtRepository.shortsFeed(AppPrefs.countryOrDefault)
+        }.getOrDefault(emptyList()).forEach { item ->
+            val url = "https://www.youtube.com/watch?v=${item.videoId}"
+            if (out.containsKey(url)) return@forEach
+            out[url] = com.sparktube.app.ui.common.VideoUiModel(
+                url = url,
+                title = item.title,
+                uploader = item.uploader,
+                thumbnailUrl = item.thumbnailUrl,
+                durationSec = 0L,
+                viewCount = 0L,
+                uploadDate = ""
+            )
+        }
+
+        // 2) Trending shorts (≤ 3 minutes)
+        if (out.size < 12) {
+            runCatching {
+                YtRepository.trending(AppPrefs.countryOrDefault)
+            }.getOrDefault(emptyList())
+                .filter { it.duration in 1L..180L }
+                .forEach { item ->
+                    val model = item.toUiModel()
+                    if (model.url.isNotBlank()) out.putIfAbsent(model.url, model)
+                }
+        }
+
+        // 3) Search top-up
         if (out.size < 12) {
             runCatching {
                 YtRepository.searchVideos("trending shorts clips", null).items

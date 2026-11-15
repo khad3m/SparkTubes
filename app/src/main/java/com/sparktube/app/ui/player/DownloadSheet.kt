@@ -210,9 +210,16 @@ class DownloadSheet(
                     layoutParams = marginParams()
                 }
                 root.addView(note)
+                // v1.7.1: AAC/M4A audio first for the merged MP4 — muxing Opus/WebM
+                // audio into MP4 is unreliable across devices (MX Player "no sound").
                 val bestM4aAudio = audioTrack.streams
                     .filter { it.isUrl && audioExtOf(it) == "m4a" }
                     .maxByOrNull { it.averageBitrate }
+                    // Any non-WebM audio next (AAC/MP3 mux reliably):
+                    ?: audioTrack.streams
+                        .filter { it.isUrl && audioExtOf(it) != "webm" && audioExtOf(it) != "opus" }
+                        .maxByOrNull { it.averageBitrate }
+                    // Opus/WebM only as the very last resort:
                     ?: audioTrack.best!!
                 catalog.videoOnly.forEach { listed ->
                     val v = bestVideoForHeight(listed.effectiveHeight()) ?: listed
@@ -243,7 +250,8 @@ class DownloadSheet(
                                         quality = quality,
                                         videoStreamUrl = v.content,
                                         audioStreamUrl = bestM4aAudio.content,
-                                        durationSec = durationSec
+                                        durationSec = durationSec,
+                                        audioExt = audioExtOf(bestM4aAudio)
                                     )
                                     toastStarted()
                                     onDownloadStarted?.invoke()

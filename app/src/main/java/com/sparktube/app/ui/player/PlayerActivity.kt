@@ -15,6 +15,7 @@ import android.os.Looper
 import android.text.method.LinkMovementMethod
 import android.util.Rational
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
@@ -953,25 +954,27 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         val current = AppPrefs.subtitleMode
-        val options = listOf(
-            AppPrefs.SUBTITLE_MODE_BANGLA to getString(R.string.subtitles_bangla_auto),
-            AppPrefs.SUBTITLE_MODE_ORIGINAL to getString(R.string.subtitles_original),
-            AppPrefs.SUBTITLE_MODE_OFF to getString(R.string.subtitles_off)
-        )
-        options.forEach { (mode, label) ->
-            root.addView(
-                sheetRow(label, current == mode) {
-                    AppPrefs.subtitleMode = mode
-                    updateSubtitleUiBadge()
-                    val entry = PlaybackCenter.currentEntry
-                    if (catalog != null && entry != null) {
-                        maybeLoadSubtitles(catalog, entry.url, forceReload = true)
+        root.addView(
+            chipGrid(
+                listOf(
+                    AppPrefs.SUBTITLE_MODE_BANGLA to getString(R.string.subtitles_bangla_auto),
+                    AppPrefs.SUBTITLE_MODE_ORIGINAL to getString(R.string.subtitles_original),
+                    AppPrefs.SUBTITLE_MODE_OFF to getString(R.string.subtitles_off)
+                ).map { (mode, label) ->
+                    Triple(label, current == mode) {
+                        AppPrefs.subtitleMode = mode
+                        updateSubtitleUiBadge()
+                        val entry = PlaybackCenter.currentEntry
+                        if (catalog != null && entry != null) {
+                            maybeLoadSubtitles(catalog, entry.url, forceReload = true)
+                        }
+                        Toast.makeText(this, "${getString(R.string.subtitles_section)}: $label", Toast.LENGTH_SHORT).show()
+                        sheet.dismiss()
                     }
-                    Toast.makeText(this, "${getString(R.string.subtitles_section)}: $label", Toast.LENGTH_SHORT).show()
-                    sheet.dismiss()
-                }
+                },
+                perRow = 3
             )
-        }
+        )
         showSheet(sheet, root, peekDp = 320)
     }
 
@@ -1477,6 +1480,73 @@ class PlayerActivity : AppCompatActivity() {
             setOnClickListener { onClick() }
         }
 
+    /** Premium grid: section caption above a chip block (v1.7.1). */
+    private fun sheetSectionLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        letterSpacing = 0.08f
+        setTextColor(Themes.accentColor(this@PlayerActivity))
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(2), dp(12), 0, dp(4))
+    }
+
+    /** One row of premium pill chips — the Audio Studio look (v1.7.1). */
+    private fun chipRow(chips: List<Triple<String, Boolean, () -> Unit>>): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(6) }
+        }
+        chips.forEach { (label, active, action) ->
+            row.addView(
+                TextView(this).apply {
+                    text = label
+                    textSize = 14f
+                    gravity = Gravity.CENTER
+                    minHeight = dp(42)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(14), dp(8), dp(14), dp(8))
+                    setTextColor(if (active) getColor(R.color.white) else Themes.onSurfaceColor(this@PlayerActivity))
+                    setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(21).toFloat()
+                        if (active) {
+                            setColor(Themes.accentColor(this@PlayerActivity))
+                        } else {
+                            setColor(Themes.elevatedColor(this@PlayerActivity))
+                        }
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                    ).also { it.marginEnd = dp(6) }
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        action()
+                    }
+                }
+            )
+        }
+        return row
+    }
+
+    /** Wraps chips into rows of [perRow]. */
+    private fun chipGrid(
+        chips: List<Triple<String, Boolean, () -> Unit>>,
+        perRow: Int = 3
+    ): LinearLayout {
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        var i = 0
+        while (i < chips.size) {
+            column.addView(chipRow(chips.subList(i, minOf(i + perRow, chips.size))))
+            i += perRow
+        }
+        return column
+    }
+
     private fun sheetMenuRow(mainLabel: String, valueLabel: String, onClick: () -> Unit): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1632,8 +1702,8 @@ class PlayerActivity : AppCompatActivity() {
         root.addView(sheetTitle(getString(R.string.settings_quality_section)))
 
         val currentHeight = PlaybackCenter.effectiveSelectedHeight(catalog)
-        root.addView(
-            sheetRow(getString(R.string.quality_auto), currentHeight == null) {
+        val chips = mutableListOf<Triple<String, Boolean, () -> Unit>>(
+            Triple(getString(R.string.quality_auto), currentHeight == null) {
                 PlaybackCenter.setVideoQuality(null)
                 binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
                 sheet.dismiss()
@@ -1646,20 +1716,19 @@ class PlayerActivity : AppCompatActivity() {
             val label = "${h}p" +
                 (if (v.fps > 30) " ${v.fps}fps" else "") +
                 (if (useMuxed) " (muxed)" else "")
-            root.addView(sheetRow(label, currentHeight == h) {
+            chips.add(Triple(label, currentHeight == h) {
                 PlaybackCenter.setVideoQuality(h)
                 binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
                 sheet.dismiss()
             })
         }
-        root.addView(
-            sheetRow(getString(R.string.quality_audio_only), currentHeight == -1) {
-                PlaybackCenter.setVideoQuality(-1)
-                updateModeSwitcherUi()
-                binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
-                sheet.dismiss()
-            }
-        )
+        chips.add(Triple(getString(R.string.quality_audio_only), currentHeight == -1) {
+            PlaybackCenter.setVideoQuality(-1)
+            updateModeSwitcherUi()
+            binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
+            sheet.dismiss()
+        })
+        root.addView(chipGrid(chips, perRow = 3))
         showSheet(sheet, root)
     }
 
@@ -1668,23 +1737,26 @@ class PlayerActivity : AppCompatActivity() {
         val root = sheetRoot()
         root.addView(sheetTitle(getString(R.string.settings_speed_section)))
 
-        // 0.5x – 3.0x range (v1.7.0), with the current speed highlighted.
+        // 0.5x – 3.0x range (v1.7.0), premium chip grid (v1.7.1).
         val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
         val currentSpeed = PlaybackCenter.playbackSpeed
-        speeds.forEach { s ->
-            root.addView(
-                sheetRow(
-                    if (s == 1.0f) getString(R.string.speed_normal) else "${s}x",
-                    kotlin.math.abs(s - currentSpeed) < 0.01f
-                ) {
-                    PlaybackCenter.setSpeed(s)
-                    PlaybackCenter.catalogForCurrentEntry()?.let {
-                        binding.qualityBadgeInfo.text = "${qualitySummary(it)} · ${speedSummary()}"
+        root.addView(
+            chipGrid(
+                speeds.map { s ->
+                    Triple(
+                        if (s == 1.0f) getString(R.string.speed_normal) else "${s}x",
+                        kotlin.math.abs(s - currentSpeed) < 0.01f
+                    ) {
+                        PlaybackCenter.setSpeed(s)
+                        PlaybackCenter.catalogForCurrentEntry()?.let {
+                            binding.qualityBadgeInfo.text = "${qualitySummary(it)} · ${speedSummary()}"
+                        }
+                        sheet.dismiss()
                     }
-                    sheet.dismiss()
-                }
+                },
+                perRow = 3
             )
-        }
+        )
         showSheet(sheet, root)
     }
 
@@ -1695,24 +1767,27 @@ class PlayerActivity : AppCompatActivity() {
         root.addView(sheetTitle(getString(R.string.settings_audio_track_section)))
 
         val currentTrack = PlaybackCenter.selectedAudioTrackId
-        catalog.audioTracks.forEach { t ->
-            val label = t.label + if (t.isOriginal) {
-                " (${getString(R.string.audio_track_original)})"
-            } else {
-                ""
-            }
-            root.addView(
-                sheetRow(label, currentTrack == t.id) {
-                    PlaybackCenter.setAudioTrack(t.id)
-                    Toast.makeText(
-                        this,
-                        getString(R.string.audio_track_switched_to, label),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    sheet.dismiss()
-                }
+        root.addView(
+            chipGrid(
+                catalog.audioTracks.map { t ->
+                    val label = t.label + if (t.isOriginal) {
+                        " (${getString(R.string.audio_track_original)})"
+                    } else {
+                        ""
+                    }
+                    Triple(label, currentTrack == t.id) {
+                        PlaybackCenter.setAudioTrack(t.id)
+                        Toast.makeText(
+                            this,
+                            getString(R.string.audio_track_switched_to, label),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        sheet.dismiss()
+                    }
+                },
+                perRow = 2
             )
-        }
+        )
         showSheet(sheet, root)
     }
 

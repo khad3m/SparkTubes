@@ -3,6 +3,7 @@ package com.sparktube.app.ui.menu
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -25,6 +26,7 @@ import com.sparktube.app.R
 import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.ui.music.Motion
 import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.databinding.ActivitySettingsPageBinding
@@ -139,15 +141,43 @@ class SettingsPageActivity : AppCompatActivity() {
                 showYouTubeAccountDialog()
             }
         )
+        // Premium chip grid: Theme (v1.7.1)
+        content.addView(sectionLabel(getString(R.string.settings_theme)))
         content.addView(
-            menuRow(getString(R.string.settings_theme), themeLabel()) {
-                showThemePicker()
-            }
+            chipGrid(
+                listOf(
+                    AppPrefs.THEME_AUTO to getString(R.string.theme_auto),
+                    AppPrefs.THEME_DARK to getString(R.string.theme_dark),
+                    AppPrefs.THEME_LIGHT to getString(R.string.theme_light),
+                    AppPrefs.THEME_PITCH_BLACK to getString(R.string.theme_pitch_black)
+                ).map { (value, label) ->
+                    Triple(label, AppPrefs.theme == value) {
+                        Themes.setTheme(value, this)
+                        render()
+                    }
+                }
+            )
         )
+        // Premium chip grid: Accent colour (v1.7.1)
+        content.addView(sectionLabel(getString(R.string.settings_accent)))
         content.addView(
-            menuRow(getString(R.string.settings_accent), accentLabel()) {
-                showAccentPicker()
-            }
+            chipGrid(
+                listOf(
+                    "red" to getString(R.string.accent_red),
+                    "blue" to getString(R.string.accent_blue),
+                    "purple" to getString(R.string.accent_purple),
+                    "green" to getString(R.string.accent_green),
+                    "orange" to getString(R.string.accent_orange),
+                    "pink" to getString(R.string.accent_pink),
+                    "teal" to getString(R.string.accent_teal)
+                ).map { (value, label) ->
+                    Triple(label, AppPrefs.accent == value) {
+                        Themes.setAccent(value, this)
+                        render()
+                    }
+                },
+                perRow = 4
+            )
         )
         content.addView(
             menuRow(
@@ -626,16 +656,25 @@ class SettingsPageActivity : AppCompatActivity() {
                 showYouTubeAccountDialog()
             }
         )
-        content.addView(
-            menuRow(getString(R.string.settings_default_quality_wifi), wifiQualityLabel()) {
-                showDefaultQualityPicker(forWifi = true)
-            }
-        )
-        content.addView(
-            menuRow(getString(R.string.settings_default_quality_data), dataQualityLabel()) {
-                showDefaultQualityPicker(forWifi = false)
-            }
-        )
+        // Premium chip grid: default quality per network (v1.7.1)
+        val qualityChoices = listOf(0, 2160, 1440, 1080, 720, 480, 360)
+        fun qualityChips(currentHeight: Int, apply: (Int) -> Unit) =
+            chipGrid(
+                qualityChoices.map { height ->
+                    Triple(
+                        if (height == 0) getString(R.string.quality_auto) else "${height}p",
+                        currentHeight == height
+                    ) {
+                        apply(height)
+                        render()
+                    }
+                },
+                perRow = 4
+            )
+        content.addView(sectionLabel(getString(R.string.settings_default_quality_wifi)))
+        content.addView(qualityChips(AppPrefs.defaultVideoHeightWifi) { AppPrefs.defaultVideoHeightWifi = it })
+        content.addView(sectionLabel(getString(R.string.settings_default_quality_data)))
+        content.addView(qualityChips(AppPrefs.defaultVideoHeightData) { AppPrefs.defaultVideoHeightData = it })
         content.addView(
             menuRow(
                 getString(R.string.settings_download_folder),
@@ -644,10 +683,22 @@ class SettingsPageActivity : AppCompatActivity() {
                 showDownloadFolderPicker()
             }
         )
+        // Premium chip grid: subtitles (v1.7.1)
+        content.addView(sectionLabel(getString(R.string.subtitles_section)))
         content.addView(
-            menuRow(getString(R.string.subtitles_section), subtitleModeLabel()) {
-                showSubtitleModePicker()
-            }
+            chipGrid(
+                listOf(
+                    AppPrefs.SUBTITLE_MODE_BANGLA to getString(R.string.subtitles_bangla_auto),
+                    AppPrefs.SUBTITLE_MODE_ORIGINAL to getString(R.string.subtitles_original),
+                    AppPrefs.SUBTITLE_MODE_OFF to getString(R.string.subtitles_off)
+                ).map { (value, label) ->
+                    Triple(label, AppPrefs.subtitleMode == value) {
+                        AppPrefs.subtitleMode = value
+                        render()
+                    }
+                },
+                perRow = 3
+            )
         )
         content.addView(
             menuRow(
@@ -698,10 +749,22 @@ class SettingsPageActivity : AppCompatActivity() {
                 showYouTubeAccountDialog()
             }
         )
+        // Premium chip grid: music audio quality (v1.7.1)
+        content.addView(sectionLabel(getString(R.string.settings_audio_quality)))
         content.addView(
-            menuRow(getString(R.string.settings_audio_quality), audioQualityLabel()) {
-                showAudioQualityPicker()
-            }
+            chipGrid(
+                listOf(
+                    AppPrefs.AUDIO_QUALITY_HIGH to getString(R.string.quality_high),
+                    AppPrefs.AUDIO_QUALITY_MEDIUM to getString(R.string.quality_medium),
+                    AppPrefs.AUDIO_QUALITY_LOW to getString(R.string.quality_low)
+                ).map { (value, label) ->
+                    Triple(label, AppPrefs.musicAudioQuality == value) {
+                        AppPrefs.musicAudioQuality = value
+                        render()
+                    }
+                },
+                perRow = 3
+            )
         )
         content.addView(
             menuRow(
@@ -711,10 +774,21 @@ class SettingsPageActivity : AppCompatActivity() {
                 showDownloadFolderPicker()
             }
         )
+        // Premium chip grid: crossfade (v1.7.1)
+        content.addView(sectionLabel(getString(R.string.settings_crossfade)))
         content.addView(
-            menuRow(getString(R.string.settings_crossfade), crossfadeLabel()) {
-                showCrossfadePicker()
-            }
+            chipGrid(
+                listOf(0, 2, 4, 6, 8).map { sec ->
+                    Triple(
+                        if (sec == 0) getString(R.string.crossfade_off) else getString(R.string.crossfade_fmt, sec),
+                        AppPrefs.crossfadeSeconds == sec
+                    ) {
+                        AppPrefs.crossfadeSeconds = sec
+                        render()
+                    }
+                },
+                perRow = 5
+            )
         )
         content.addView(
             menuRow(
@@ -890,6 +964,76 @@ class SettingsPageActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    // ----- Premium chip-grid builders (v1.7.1) -----
+
+    private fun sectionLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        letterSpacing = 0.08f
+        setTextColor(Themes.accentColor(this@SettingsPageActivity))
+        setTypeface(null, Typeface.BOLD)
+        setPadding(dp(2), dp(12), 0, dp(4))
+    }
+
+    /** One row of premium pill chips (active = accent-filled). */
+    private fun chipRow(chips: List<Triple<String, Boolean, () -> Unit>>): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(6) }
+        }
+        chips.forEach { (label, active, action) ->
+            row.addView(
+                TextView(this).apply {
+                    text = label
+                    textSize = 14f
+                    gravity = Gravity.CENTER
+                    minHeight = dp(42)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(14), dp(8), dp(14), dp(8))
+                    setTextColor(if (active) getColor(R.color.white) else getColor(R.color.on_surface))
+                    setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(21).toFloat()
+                        if (active) {
+                            setColor(Themes.accentColor(this@SettingsPageActivity))
+                        } else {
+                            setColor(Themes.elevatedColor(this@SettingsPageActivity))
+                            setStroke(1, getColor(R.color.glass_stroke))
+                        }
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                    ).also { it.marginEnd = dp(6) }
+                    isClickable = true
+                    isFocusable = true
+                    Motion.pressable(this, 0.94f)
+                    setOnClickListener {
+                        performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                        action()
+                    }
+                }
+            )
+        }
+        return row
+    }
+
+    /** Wraps chips into rows of [perRow]. */
+    private fun chipGrid(
+        chips: List<Triple<String, Boolean, () -> Unit>>,
+        perRow: Int = 3
+    ): LinearLayout {
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        var i = 0
+        while (i < chips.size) {
+            column.addView(chipRow(chips.subList(i, minOf(i + perRow, chips.size))))
+            i += perRow
+        }
+        return column
     }
 
     // ----- Glass Row builder -----

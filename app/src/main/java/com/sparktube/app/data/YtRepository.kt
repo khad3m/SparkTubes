@@ -3,6 +3,8 @@ package com.sparktube.app.data
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.util.AppPrefs
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -353,6 +355,192 @@ object YtRepository {
             val info = org.schabi.newpipe.extractor.playlist.PlaylistInfo.getInfo(service, url)
             LiveFilter.sanitize(info.relatedItems)
         }
+
+    // ----- Shorts / Reels feed (v1.7.1) -----
+
+    private val shortsHttpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+    }
+
+    /** One short-video row parsed out of the FEshorts browse response. */
+    data class ShortsFeedItem(
+        val videoId: String,
+        val title: String,
+        val uploader: String,
+        val thumbnailUrl: String
+    )
+
+    /** Depth-first collection of every JSONObject stored under [key]. */
+    private fun collectObjectsByKey(node: Any?, key: String, out: MutableList<org.json.JSONObject>) {
+        when (node) {
+            is org.json.JSONObject -> {
+                val direct = node.optJSONObject(key)
+                if (direct != null) out.add(direct)
+                for (k in node.keys()) collectObjectsByKey(node.opt(k), key, out)
+            }
+            is org.json.JSONArray -> {
+                for (i in 0 until node.length()) collectObjectsByKey(node.opt(i), key, out)
+            }
+        }
+    }
+
+    /** Depth-first collection of every string stored under [key]. */
+    private fun collectStringValues(node: Any?, key: String, out: MutableList<String>) {
+        when (node) {
+            is org.json.JSONObject -> {
+                val direct = node.optString(key).orEmpty()
+                if (direct.isNotBlank()) out.add(direct)
+                for (k in node.keys()) collectStringValues(node.opt(k), key, out)
+            }
+            is org.json.JSONArray -> {
+                for (i in 0 until node.length()) collectStringValues(node.opt(i), key, out)
+            }
+        }
+    }
+
+    /** First non-blank "content" string found anywhere inside the node. */
+    private fun firstContentString(node: Any?): String {
+        val out = mutableListOf<String>()
+        collectStringValues(node, "content", out)
+        return out.firstOrNull { it.isNotBlank() } ?: ""
+    }
+
+    private fun parseShortsFeed(json: org.json.JSONObject): List<ShortsFeedItem> {
+        val items = mutableListOf<ShortsFeedItem>()
+        val seen = HashSet<String>()
+
+        // Legacy format: reelItemRenderer
+        val reels = mutableListOf<org.json.JSONObject>()
+        collectObjectsByKey(json, "reelItemRenderer", reels)
+        for (reel in reels) {
+            val id = reel.optString("videoId").orEmpty()
+            if (id.length != 11 || !seen.add(id)) continue
+            val overlay = reel.optJSONObject("overlayMetadata")
+            val title = firstContentString(overlay?.optJSONObject("primaryText"))
+                .ifBlank { firstContentString(reel.optJSONObject("header")) }
+            val uploader = firstContentString(overlay?.optJSONObject("secondaryText"))
+            val thumbs = mutableListOf<org.json.JSONObject>()
+            collectObjectsByKey(reel.optJSONObject("thumbnail"), "thumbnail", thumbs)
+            val thumbUrl = thumbs.mapNotNull { it.optString("url").orEmpty().ifBlank { null } }
+                .lastOrNull()
+                ?: "https://i.ytimg.com/vi/$id/hqdefault.jpg"
+            items.add(ShortsFeedItem(id, title, uploader, thumbUrl))
+        }
+
+        // Current format: shortsLockupViewModel (embedded in search results
+        // and on the shorts tab). videoId lives inside the reelWatchEndpoint;
+        // the cover thumbnail inside its `thumbnail.thumbnails`.
+        val lockups = mutableListOf<org.json.JSONObject>()
+        collectObjectsByKey(json, "shortsLockupViewModel", lockups)
+        for (lockup in lockups) {
+            val ids = mutableListOf<String>()
+            collectStringValues(lockup, "videoId", ids)
+            val id = ids.firstOrNull() ?: ""
+            if (id.length != 11 || !seen.add(id)) continue
+            val overlay = lockup.optJSONObject("overlayMetadata")
+            val title = firstContentString(overlay?.optJSONObject("primaryText")).ifBlank {
+                // accessibilityText fallback: "TITLE, 48K views - play Short"
+                val a11y = lockup.optString("accessibilityText").orEmpty()
+                a11y.substringBeforeLast(" - play Short").substringBeforeLast(",").trim()
+            }
+            val views = firstContentString(overlay?.optJSONObject("secondaryText"))
+            val thumbUrls = mutableListOf<org.json.JSONObject>()
+            collectObjectsByKey(lockup, "thumbnails", thumbUrls)
+            val thumbUrl = thumbUrls.mapNotNull { it.optString("url").orEmpty().ifBlank { null } }
+                .lastOrNull()
+                ?: "https://i.ytimg.com/vi/$id/frame0.jpg"
+            items.add(ShortsFeedItem(id, title, views, thumbUrl))
+        }
+        return items
+    }
+
+    /**
+     * The Shorts / Reels feed (v1.7.1) via the InnerTube WEB search endpoint —
+     * the same endpoint the youtube.com shorts tab uses (FEshorts browse is
+     * no longer accepted anonymously).
+     *  - `gl` = the app's country preference (e.g. BD for Bangladesh)
+     *  - when the user signed in with Google, session cookies + SAPISIDHASH
+     *    are sent, so the results follow the same account personalization as
+     *    the signed-in web experience (user-specific reels).
+     * Several discovery queries are merged and de-duplicated for a feed feel.
+     */
+    suspend fun shortsFeed(countryCode: String): List<ShortsFeedItem> =
+        withContext(Dispatchers.IO) {
+            val out = LinkedHashMap<String, ShortsFeedItem>()
+            for (query in listOf("trending shorts", "viral shorts", "shorts")) {
+                if (out.size >= 30) break
+                val page = shortsSearchInnerTube(query, countryCode)
+                for (item in page) {
+                    if (item.videoId.length == 11) out.putIfAbsent(item.videoId, item)
+                }
+            }
+            out.values.toList()
+        }
+
+    /**
+     * Shorts-only search (v1.7.1): query → shortsLockupViewModel rows, with
+     * country preference and account personalization (cookies) applied.
+     */
+    suspend fun searchShorts(
+        query: String,
+        countryCode: String = AppPrefs.countryOrDefault
+    ): List<ShortsFeedItem> = shortsSearchInnerTube(query, countryCode)
+
+    private suspend fun shortsSearchInnerTube(
+        query: String,
+        countryCode: String
+    ): List<ShortsFeedItem> = withContext(Dispatchers.IO) {
+        try {
+            val body = org.json.JSONObject().apply {
+                put("query", query)
+                put(
+                    "context",
+                    org.json.JSONObject().put(
+                        "client",
+                        org.json.JSONObject()
+                            .put("clientName", "WEB")
+                            .put("clientVersion", "2.20250312.01.00")
+                            .put("hl", "en")
+                            .put("gl", countryCode.uppercase())
+                            .put("utcOffsetMinutes", 0)
+                    )
+                )
+            }
+            val builder = okhttp3.Request.Builder()
+                .url("https://www.youtube.com/youtubei/v1/search?prettyPrint=false")
+                .header("Content-Type", "application/json")
+                .header("User-Agent", com.sparktube.app.net.OkHttpDownloader.USER_AGENT)
+                .header("X-YouTube-Client-Name", "1")
+                .header("X-YouTube-Client-Version", "2.20250312.01.00")
+                .header("Origin", "https://www.youtube.com")
+                .header("Referer", "https://www.youtube.com/shorts")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            // Session cookies (+ SAPISIDHASH when signed in): personalized,
+            // user-specific shorts — the same account the user logged into.
+            com.sparktube.app.net.YouTubeAuth.buildCookieHeader().let {
+                if (it.isNotBlank()) builder.header("Cookie", it)
+            }
+            if (com.sparktube.app.net.YouTubeAuth.isLoggedIn()) {
+                com.sparktube.app.net.YouTubeAuth.buildAuthorizationHeader()?.let {
+                    builder.header("Authorization", it)
+                }
+                builder.header("X-Goog-AuthUser", "0")
+            }
+
+            shortsHttpClient.newCall(builder.build()).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val text = resp.body?.string() ?: return@withContext emptyList()
+                parseShortsFeed(org.json.JSONObject(text))
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 
     fun clearCache() {
         synchronized(streamInfoCache) {

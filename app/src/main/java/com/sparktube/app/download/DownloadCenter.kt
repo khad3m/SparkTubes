@@ -552,7 +552,8 @@ object DownloadCenter {
         quality: String,
         videoStreamUrl: String,
         audioStreamUrl: String,
-        durationSec: Long = 0L
+        durationSec: Long = 0L,
+        audioExt: String = "m4a"
     ) {
         appCtx = context.applicationContext
         val videoId = videoIdOf(videoUrl)
@@ -572,9 +573,14 @@ object DownloadCenter {
             File(destinationPath(context, "${slug}__${videoId}_AV_${qToken}_v.mp4", TYPE_AV)),
             resumeExisting = false
         )
+        // v1.7.1: the audio sidecar carries its REAL container extension
+        // (m4a for AAC, webm for Opus) so the fallback two-file case plays
+        // correctly in external players too.
+        val safeAudioExt = audioExt.lowercase()
+            .takeIf { it in setOf("m4a", "webm", "mp3", "opus", "ogg") } ?: "m4a"
         val audioJob = DownloadJob(
             audioStreamUrl,
-            File(destinationPath(context, "${slug}__${videoId}_AV_${qToken}_a.m4a", TYPE_AV)),
+            File(destinationPath(context, "${slug}__${videoId}_AV_${qToken}_a.$safeAudioExt", TYPE_AV)),
             resumeExisting = false
         )
         jobs[videoJob.id] = videoJob
