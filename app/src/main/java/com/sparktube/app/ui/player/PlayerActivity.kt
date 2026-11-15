@@ -1612,15 +1612,14 @@ class PlayerActivity : AppCompatActivity() {
         // low-RAM devices because the glass tiles (semi-transparent Gradient-
         // Drawables) were re-composited on every scroll frame over the video:
         //  - a hardware layer renders the (static) sheet content once and then
-        //    scrolls it as a GPU texture;
-        //  - scrollingCache=off stops the per-scroll bitmap churn;
+        //    scrolls it as a GPU texture (no per-frame re-compositing of the
+        //    glass tiles over the video);
         //  - the sheet opens fully expanded and never re-collapses, so
         //    BottomSheetBehavior no longer fights the ScrollView for gestures.
         val scroll = android.widget.ScrollView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
-            setScrollingCacheEnabled(false)
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
             addView(root)
         }
