@@ -159,7 +159,7 @@ object AppPrefs {
 
     /** Subtitle mode: "bn" (Bangla Auto-Translate), "orig" (Original CC), or "off". */
     var subtitleMode: String
-        get() = sp.getString(KEY_SUBTITLE_MODE, SUBTITLE_MODE_BANGLA) ?: SUBTITLE_MODE_BANGLA
+        get() = sp.getString(KEY_SUBTITLE_MODE, SUBTITLE_MODE_OFF) ?: SUBTITLE_MODE_OFF
         set(value) {
             sp.edit().putString(KEY_SUBTITLE_MODE, value).apply()
         }
@@ -258,7 +258,7 @@ object AppPrefs {
         }
 
     var fullscreenScale: String
-        get() = sp.getString(KEY_FULLSCREEN_SCALE, SCALE_FIT) ?: SCALE_FIT
+        get() = sp.getString(KEY_FULLSCREEN_SCALE, SCALE_STRETCH) ?: SCALE_STRETCH
         set(value) {
             sp.edit().putString(KEY_FULLSCREEN_SCALE, value).apply()
         }

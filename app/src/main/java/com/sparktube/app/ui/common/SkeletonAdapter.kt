@@ -2,6 +2,7 @@ package com.sparktube.app.ui.common
 
 import android.animation.ObjectAnimator
 import android.view.LayoutInflater
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
@@ -53,11 +54,16 @@ class SkeletonAdapter(
     override fun onViewAttachedToWindow(holder: VH) {
         // Staggered breathing pulse; the offset per position keeps rows from
         // flashing in perfect sync (which reads as a single big blob).
-        val anim = ObjectAnimator.ofFloat(holder.itemView, View.ALPHA, 0.45f, 1f).apply {
-            duration = 650
+        val pos = holder.bindingAdapterPosition.coerceAtLeast(0)
+        holder.itemView.translationY = 8f
+        holder.itemView.animate().translationY(0f).setDuration(260)
+            .setStartDelay((pos % 6) * 40L).start()
+        val anim = ObjectAnimator.ofFloat(holder.itemView, View.ALPHA, 0.36f, 0.94f).apply {
+            duration = 780
+            interpolator = AccelerateDecelerateInterpolator()
             repeatMode = ObjectAnimator.REVERSE
             repeatCount = ObjectAnimator.INFINITE
-            startDelay = (holder.bindingAdapterPosition % 6) * 90L
+            startDelay = (pos % 6) * 85L
         }
         holder.animator = anim
         anim.start()
@@ -87,12 +93,12 @@ class SkeletonPulse {
     private val animators = mutableListOf<ObjectAnimator>()
 
     fun attach(view: View, index: Int) {
-        animators += ObjectAnimator.ofFloat(view, View.ALPHA, 0.45f, 1f).apply {
-            duration = 650
+        animators += ObjectAnimator.ofFloat(view, View.ALPHA, 0.36f, 0.94f).apply {
+            duration = 780
+            interpolator = AccelerateDecelerateInterpolator()
             repeatMode = ObjectAnimator.REVERSE
             repeatCount = ObjectAnimator.INFINITE
-            // Stagger so the placeholders don't flash as one blob.
-            startDelay = (index % 6) * 90L
+            startDelay = (index % 6) * 85L
             start()
         }
     }

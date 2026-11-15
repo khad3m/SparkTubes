@@ -1,16 +1,21 @@
-# SparkTube v1.7.4 — Upgrade & Changelog
+# SparkTube v1.7.5 — Upgrade & Changelog
 
-## What's Fixed & Upgraded in v1.7.4
-1. **Menu / Settings Content Now Fully Scrollable (`activity_settings_page.xml`, `fragment_menu.xml`)**: The settings pages opened from the Menu (General / Video / Music) had a `match_parent` ScrollView inside a vertical LinearLayout, which pushed the bottom of the scroll area past the screen edge so the last grid cards could never be reached. It is now `0dp` + `weight=1` + `fillViewport`, ending exactly at the screen bottom. The Menu tab's own bottom padding was raised 118dp → 176dp so every grid card always rests above the floating nav bar and the mini player.
-2. **Add to Playlist for Music (`PlaylistPicker.kt`, `MusicFragment.kt`, `NowPlayingActivity.kt`)**: Playlists existed but there was no way to file a song into one. Long-pressing any track in the Music tab (trending cards + Top Songs rows) now offers "Add to Playlist", and the Now Playing options sheet gained the same action. The picker lists every playlist with item counts, toggles membership (add / remove) with confirmation toasts, and "+ New Playlist" creates a playlist and files the song straight in.
-3. **Player Settings Sheet Scroll Lag Fixed (`PlayerActivity.kt`)**: The reddish-glass settings grid was re-composited on every scroll frame over the playing video, which felt sticky on low-RAM devices. The sheet content now renders once into a hardware layer and scrolls as a GPU texture, the ScrollView's scroll cache and over-scroll glow are disabled, and the settings sheet opens fully expanded with drag locked so `BottomSheetBehavior` no longer fights the ScrollView for gestures. The queue / comment sheets keep their normal drag behavior.
-4. **Shorts: Fresh Feed, Instant Swipes, Cache Wiped on Exit (`ShortsActivity.kt`, `PlaybackCenter.kt`, `SparkTubeApp.kt`)**: Shorts no longer show the same feed on every open — watched items are tracked for the session and filtered out (the pool recycles only when nothing unseen is left). While a short plays, the next 5 shorts' stream catalogs are pre-resolved on IO so the next swipe starts instantly through the prefetch cache. The prefetch session is wiped when the shorts screen closes and when the app leaves the foreground (activity count hits 0), so nothing keeps loading in the background.
+## What's New in v1.7.5 (latest source export)
+1. **SparkAudioProcessor — Real-Time Vocal & Noise Engine (`playback/SparkAudioProcessor.kt`, integrated in `PlaybackCenter.kt`)**: A new Media3 `BaseAudioProcessor` chain: a 1024-point Hann-windowed 50%-overlap STFT spectral vocal isolator (per-bin Mid/Side Wiener center-channel masking, < 300 Hz bass and > 4.5 kHz cymbal hard-cuts, vocal-formant gate) plus a noise-cancel mode (85 Hz rumble high-pass + 7.2 kHz hiss low-pass + smooth gate).
+2. **New EQ Presets (`NowPlayingActivity.kt`)**: The equalizer sheet gained 🔊 Speaker Box, 🎛 Flat, 💥 Bass Boost, 🎙 Vocal Studio (drives the vocal isolator), ⚡ Club and ✨ Treble — mapped through the new processor in PlaybackCenter.
+3. **Now Playing Audio-First Polish**: The lyrics button/overlay is replaced by audio-focused info (LOSSLESS · AUDIO badge) to keep the player lightweight.
+4. **Music Playlists Manager (`MusicFragment.kt`)**: The Playlists button now opens a manage dialog — "+ Create New Playlist" plus every playlist with item counts (play / manage in one place, alongside the long-press "Add to Playlist" picker from v1.7.4).
+5. **Streaming & Unlock Engine (`YtRepository.kt`, `YouTubePlayerUnlock.kt`, `YouTubeAuth.kt`)**: Refined stream resolution and signed-in unlock paths; extractor served through the local `newpipeextractor-0.26.5-android-compat.jar`.
+6. **Smoothness (`Motion.kt`, `SkeletonAdapter.kt`, `HomeFragment.kt`, `MainActivity.kt`)**: Touch feedback and skeleton list polish; menu tab padding raised further (210dp) so cards always rest above the nav bar.
 
-## v1.7.3 (previous round, also included)
+## v1.7.4 (previous round, retained)
+Menu/Settings scroll bounds + nav overlap fix, Music Add-to-Playlist picker (track sheet + Now Playing), player settings sheet GPU-layer scroll fix, shorts seen-dedupe + next-5 prefetch + cache wipe on exit.
+
+## v1.7.3 (also retained)
 Shorts pager surface fix, SAPISID1P/3PHASH + MWEB signed-in age-gate unlock, Now Playing minimize button, reddish-glass player settings grid, search history filtering, menu/settings card grids, cancellation guards, AV muxing priorities + WebM + monotonic PTS.
 
 ## Local Build & GitHub Release
 ```bash
 ./gradlew assembleRelease
-bash push_and_release.sh   # or: git push origin main && git tag v1.7.4 && git push origin v1.7.4
+bash push_and_release.sh   # or: git push origin main && git tag v1.7.5 && git push origin v1.7.5
 ```

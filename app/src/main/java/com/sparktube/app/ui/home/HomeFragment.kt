@@ -77,7 +77,9 @@ class HomeFragment : Fragment(), ScrollsToTop {
         binding.list.layoutManager = LinearLayoutManager(requireContext())
         binding.list.adapter = adapter
 
+        binding.swipe.setColorSchemeColors(com.sparktube.app.util.Themes.accentColor(requireContext()))
         binding.swipe.setOnRefreshListener { load() }
+        com.sparktube.app.ui.music.Motion.pressable(binding.searchButton, 0.98f)
 
         binding.searchButton.setOnClickListener {
             startActivity(
@@ -130,6 +132,7 @@ class HomeFragment : Fragment(), ScrollsToTop {
         updateChipSelection(selectedCategoryQuery)
 
         chips.forEach { (tv, query) ->
+            com.sparktube.app.ui.music.Motion.pressable(tv, 0.94f)
             tv.setOnClickListener {
                 if (selectedCategoryQuery == query && !stale()) {
                     scrollToTop()
@@ -192,8 +195,10 @@ class HomeFragment : Fragment(), ScrollsToTop {
                 } else {
                     YtRepository.searchVideos(catQuery, null).items
                 }
+                b.list.alpha = 0f
                 b.list.adapter = adapter
                 adapter.submitList(items.map { it.toUiModel() })
+                b.list.animate().alpha(1f).setDuration(220).start()
                 b.emptyView.isVisible = items.isEmpty()
                 if (items.isEmpty()) {
                     b.errorText.text = getString(R.string.error_no_results)

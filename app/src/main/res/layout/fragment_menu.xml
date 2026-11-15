@@ -5,8 +5,7 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_ambient"
     android:clipToPadding="false"
-    android:fillViewport="true"
-    android:paddingBottom="176dp">
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -15,7 +14,7 @@
         android:paddingStart="16dp"
         android:paddingTop="12dp"
         android:paddingEnd="16dp"
-        android:paddingBottom="20dp">
+        android:paddingBottom="210dp">
 
         <TextView
             android:layout_width="wrap_content"

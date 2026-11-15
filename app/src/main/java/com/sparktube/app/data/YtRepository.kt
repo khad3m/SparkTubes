@@ -188,35 +188,59 @@ object YtRepository {
     ): List<StreamInfoItem> = withContext(Dispatchers.IO) {
         val trending = trending(countryCode)
         if (!snap.hasSignal) {
-            return@withContext trending
+            // Even without personal history, rotate within tiers so refresh shows variety
+            return@withContext trending.chunked(6).flatMap { it.shuffled() }
         }
 
-        val seen = trending.map { it.url }.toHashSet()
         val watched = snap.recentWatchedUrls.toHashSet()
+        val seen = HashSet<String>()
         val candidates = mutableListOf<StreamInfoItem>()
-        if (snap.relatedSources.isNotEmpty()) {
-            withTimeoutOrNull(RELATED_FETCH_TIMEOUT_MS) {
-                coroutineScope {
-                    snap.relatedSources.map { sourceUrl ->
-                        async { runCatching { related(sourceUrl) }.getOrDefault(emptyList()) }
-                    }.awaitAll()
+
+        // 1) Dynamic search seeds from user's top keywords & preferred channels (shuffled per load)
+        val topKeywords = snap.keywordWeights.entries
+            .sortedByDescending { it.value }
+            .take(10)
+            .map { it.key }
+            .shuffled()
+            .take(4)
+        val topChannels = snap.channelWeights.entries
+            .sortedByDescending { it.value }
+            .take(4)
+            .map { it.key }
+            .shuffled()
+            .take(2)
+        val seedQueries = buildList {
+            if (topKeywords.size >= 2) add("${topKeywords[0]} ${topKeywords[1]}")
+            if (topKeywords.size >= 4) add("${topKeywords[2]} ${topKeywords[3]}")
+            topChannels.forEach { add(it) }
+        }.distinct().take(3)
+
+        withTimeoutOrNull(RELATED_FETCH_TIMEOUT_MS) {
+            coroutineScope {
+                val relJobs = snap.relatedSources.take(4).map { sourceUrl ->
+                    async { runCatching { related(sourceUrl) }.getOrDefault(emptyList()) }
                 }
-            }?.forEach { list ->
-                list.forEach { item ->
-                    if (item.url !in seen && item.url !in watched) {
-                        seen.add(item.url)
-                        candidates.add(item)
-                    }
+                val searchJobs = seedQueries.map { q ->
+                    async { runCatching { searchVideos(q, null).items }.getOrDefault(emptyList()) }
+                }
+                (relJobs + searchJobs).awaitAll()
+            }
+        }?.forEach { list ->
+            list.forEach { item ->
+                val u = item.url.orEmpty()
+                if (u.isNotBlank() && u !in watched && seen.add(u)) {
+                    candidates.add(item)
                 }
             }
         }
 
-        val pool = (candidates + trending).filter { it.url !in watched }
+        val trendingFresh = trending.filter { it.url !in watched && seen.add(it.url) }
+        val pool = candidates + trendingFresh
         if (pool.isEmpty()) {
-            return@withContext trending
+            return@withContext trending.shuffled()
         }
         val ranked = pool
-            .map { it to RecommendEngine.score(it, snap) }
+            .map { it to (RecommendEngine.score(it, snap) + Math.random() * 0.45) }
             .sortedByDescending { (_, score) -> score }
 
         val perChannel = HashMap<String, Int>()

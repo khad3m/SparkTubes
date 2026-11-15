@@ -4,10 +4,13 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import android.net.Uri
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager
 import java.util.Collections
+import java.util.concurrent.TimeUnit
 
 /**
  * Multi-Client InnerTube Unlock Engine:
@@ -36,6 +39,123 @@ object YouTubePlayerUnlock {
 
     private val forcedVideoIds: MutableSet<String> =
         Collections.synchronizedSet(HashSet<String>())
+
+    @Volatile private var cachedSts: Int? = null
+    @Volatile private var cachedStsAt: Long = 0L
+
+    private val directClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun signatureTimestampFor(videoId: String): Int? {
+        val now = System.currentTimeMillis()
+        cachedSts?.let { if (now - cachedStsAt < 6 * 3600_000L) return it }
+        val sts = runCatching { YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId) }.getOrNull()
+        if (sts != null && sts > 0) {
+            cachedSts = sts
+            cachedStsAt = now
+        }
+        return sts
+    }
+
+    /** Direct InnerTube unlock call for PlaybackCenter bypass when NewPipe throws AgeRestrictedContentException. */
+    fun fetchUnlockedPlayerJson(videoId: String): JSONObject? {
+        if (videoId.isBlank()) return null
+        val loggedIn = YouTubeAuth.isLoggedIn()
+        val candidates = if (loggedIn) {
+            listOf(
+                FallbackSpec("TVHTML5", useCookies = true),
+                FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
+                FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
+                FallbackSpec("MWEB", useCookies = true),
+                FallbackSpec("WEB", useCookies = true),
+                FallbackSpec("ANDROID", useCookies = true),
+                FallbackSpec("ANDROID_VR", useCookies = false),
+                FallbackSpec("IOS", useCookies = false)
+            )
+        } else {
+            listOf(
+                FallbackSpec("ANDROID_VR", useCookies = false),
+                FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = false),
+                FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = false),
+                FallbackSpec("IOS", useCookies = false)
+            )
+        }
+        var cipherFallback: JSONObject? = null
+        for (spec in candidates) {
+            val fb = fetchFallbackPlayer(videoId, spec, directClient, null) ?: continue
+            deobfuscateStreamingData(fb, videoId)
+            if (isPlayableWithDirectUrls(fb)) {
+                normalizePlayerJson(fb, null, videoId)
+                return fb
+            }
+            if (isPlayableWithStreamSources(fb) && cipherFallback == null) {
+                cipherFallback = fb
+            }
+        }
+        return cipherFallback?.also {
+            deobfuscateStreamingData(it, videoId)
+            normalizePlayerJson(it, null, videoId)
+        }
+    }
+
+    private fun deobfuscateStreamingData(root: JSONObject, videoId: String) {
+        val sd = root.optJSONObject("streamingData") ?: return
+        deobfuscateArray(sd.optJSONArray("formats"), videoId)
+        deobfuscateArray(sd.optJSONArray("adaptiveFormats"), videoId)
+    }
+
+    private fun deobfuscateArray(arr: JSONArray?, videoId: String) {
+        if (arr == null) return
+        for (i in 0 until arr.length()) {
+            val fmt = arr.optJSONObject(i) ?: continue
+            var directUrl = fmt.optString("url", "")
+            if (directUrl.isBlank()) {
+                val cipherStr = fmt.optString("signatureCipher", "").ifBlank { fmt.optString("cipher", "") }
+                if (cipherStr.isNotBlank()) {
+                    val parsed = parseQueryParams(cipherStr)
+                    val baseUrl = parsed["url"].orEmpty()
+                    val encSig = parsed["s"].orEmpty()
+                    val sp = parsed["sp"].orEmpty().ifBlank { "signature" }
+                    if (baseUrl.startsWith("http")) {
+                        directUrl = if (encSig.isNotBlank()) {
+                            val decSig = runCatching {
+                                YoutubeJavaScriptPlayerManager.deobfuscateSignature(videoId, encSig)
+                            }.getOrNull().orEmpty()
+                            if (decSig.isNotBlank()) {
+                                val sep = if (baseUrl.contains("?")) "&" else "?"
+                                "$baseUrl$sep$sp=${Uri.encode(decSig)}"
+                            } else ""
+                        } else {
+                            baseUrl
+                        }
+                    }
+                }
+            }
+            if (directUrl.startsWith("http")) {
+                val cleanUrl = runCatching {
+                    YoutubeJavaScriptPlayerManager.getUrlWithThrottlingParameterDeobfuscated(videoId, directUrl)
+                }.getOrDefault(directUrl)
+                fmt.put("url", cleanUrl)
+            }
+        }
+    }
+
+    private fun parseQueryParams(qs: String): Map<String, String> {
+        val map = LinkedHashMap<String, String>()
+        qs.split("&").forEach { part ->
+            val eq = part.indexOf('=')
+            if (eq > 0) {
+                val k = Uri.decode(part.substring(0, eq))
+                val v = Uri.decode(part.substring(eq + 1))
+                map[k] = v
+            }
+        }
+        return map
+    }
 
     fun forceUnlockForUrl(url: String) {
         val id = extractVideoIdFromUrl(url)
@@ -127,6 +247,7 @@ object YouTubePlayerUnlock {
             var cipherFallback: JSONObject? = null
             for (spec in candidates) {
                 val fb = fetchFallbackPlayer(videoId, spec, httpClient, reqJson) ?: continue
+                deobfuscateStreamingData(fb, videoId)
                 val st = fb.optJSONObject("playabilityStatus")
                 Log.d(
                     TAG,
@@ -254,6 +375,18 @@ object YouTubePlayerUnlock {
             origRequest?.optJSONObject("playbackContext")?.let { payload.put("playbackContext", it) }
             origRequest?.optJSONObject("serviceIntegrityDimensions")?.let {
                 payload.put("serviceIntegrityDimensions", it)
+            }
+        } else if (spec.kind in setOf("WEB", "MWEB", "TVHTML5", "TVHTML5_SIMPLY_EMBEDDED_PLAYER", "WEB_EMBEDDED_PLAYER")) {
+            signatureTimestampFor(videoId)?.let { sts ->
+                payload.put(
+                    "playbackContext",
+                    JSONObject().put(
+                        "contentPlaybackContext",
+                        JSONObject()
+                            .put("html5Preference", "HTML5_PREF_WANTS")
+                            .put("signatureTimestamp", sts)
+                    )
+                )
             }
         }
         val reqBuilder = Request.Builder()

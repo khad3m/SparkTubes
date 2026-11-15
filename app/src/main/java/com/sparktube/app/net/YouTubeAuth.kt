@@ -180,6 +180,14 @@ object YouTubeAuth {
             clientParam == "IOS" -> {
                 headers["User-Agent"] = UA_IOS
             }
+            clientParam == "MWEB" -> {
+                headers["User-Agent"] = UA_WEB_CHROME
+                headers["Origin"] = "https://m.youtube.com"
+                headers["Referer"] = "https://m.youtube.com/"
+                if (isLoggedIn()) {
+                    headers["Cookie"] = buildCookieHeader()
+                }
+            }
             clientParam.startsWith("ANDROID") -> {
                 headers["User-Agent"] = UA_ANDROID
             }

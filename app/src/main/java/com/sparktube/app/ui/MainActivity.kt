@@ -93,6 +93,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        com.sparktube.app.ui.music.Motion.pressable(binding.miniPlayer, 0.98f)
+        com.sparktube.app.ui.music.Motion.pressable(binding.miniPlayPause, 0.90f)
         binding.miniPlayPause.setOnClickListener {
             it.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
             PlaybackCenter.togglePlayPause()

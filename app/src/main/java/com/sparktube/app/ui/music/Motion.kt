@@ -18,12 +18,12 @@ object Motion {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     v.animate().cancel()
-                    v.animate().scaleX(pressedScale).scaleY(pressedScale)
-                        .setInterpolator(DecelerateInterpolator()).setDuration(90).start()
+                    v.animate().scaleX(pressedScale).scaleY(pressedScale).alpha(0.88f)
+                        .setInterpolator(DecelerateInterpolator()).setDuration(85).start()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    v.animate().scaleX(1f).scaleY(1f)
-                        .setInterpolator(OvershootInterpolator(2f)).setDuration(220).start()
+                    v.animate().scaleX(1f).scaleY(1f).alpha(1f)
+                        .setInterpolator(OvershootInterpolator(1.8f)).setDuration(230).start()
                 }
             }
             false

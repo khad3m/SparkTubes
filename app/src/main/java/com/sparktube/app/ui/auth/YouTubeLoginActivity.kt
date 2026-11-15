@@ -153,10 +153,12 @@ class YouTubeLoginActivity : AppCompatActivity() {
     private fun collectAllYouTubeCookies(): String {
         return runCatching {
             val cm = CookieManager.getInstance()
+            runCatching { cm.flush() }
             val urls = listOf(
                 "https://www.youtube.com",
                 "https://m.youtube.com",
                 "https://music.youtube.com",
+                "https://accounts.youtube.com",
                 "https://youtube.com"
             )
             val combined = LinkedHashMap<String, String>()

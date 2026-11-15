@@ -270,7 +270,7 @@
                 android:paddingTop="2dp"
                 android:paddingEnd="10dp"
                 android:paddingBottom="2dp"
-                android:text="LOSSLESS · SYNCED"
+                android:text="LOSSLESS · AUDIO"
                 android:textColor="@color/np_accent_text"
                 android:textSize="9sp"
                 android:textStyle="bold" />
@@ -421,6 +421,7 @@
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Synced Lyrics"
                 android:src="@drawable/ic_info"
+                android:visibility="gone"
                 app:tint="@color/white" />
 
             <ImageButton

@@ -233,10 +233,8 @@ class NowPlayingActivity : AppCompatActivity() {
             showAppleMusicOptionsDialog()
         }
 
-        binding.lyricsButton.setOnClickListener { view ->
-            bounceButton(view)
-            toggleLyricsOverlay()
-        }
+        binding.lyricsButton.isVisible = false
+        binding.lyricsOverlay.isVisible = false
         binding.radioButton.setOnClickListener { view ->
             bounceButton(view)
             restartRadio()
@@ -442,6 +440,9 @@ class NowPlayingActivity : AppCompatActivity() {
     }
 
     private fun toggleLyricsOverlay() {
+        lyricsVisible = false
+        binding.lyricsOverlay.isVisible = false
+        return
         lyricsVisible = !lyricsVisible
         // A failed/empty earlier lookup must not be permanent: retry when the user opens lyrics.
         if (lyricsVisible && currentLyrics == null) {
@@ -622,7 +623,6 @@ class NowPlayingActivity : AppCompatActivity() {
 
         binding.scrubberEffectBadge.text = when {
             sleepRem > 0L -> "☾ ${(sleepRem / 60_000L) + 1}M · ${PlaybackCenter.currentEqPresetLabel.substringBefore(" ").uppercase(Locale.US)}$fadeTag"
-            hasSynced -> "♪ SYNCED LYRICS · ${PlaybackCenter.currentEqPresetLabel.substringBefore(" ").uppercase(Locale.US)}$fadeTag"
             else -> "$sourceTag · ${PlaybackCenter.currentEqPresetLabel.substringBefore(" ").uppercase(Locale.US)}$fadeTag"
         }
     }
@@ -686,19 +686,6 @@ class NowPlayingActivity : AppCompatActivity() {
             setPadding(0, px(3), 0, 0)
         })
 
-        // ----- Lyrics section (top of Timer / Audio Studio sheet) -----
-        root.addView(sectionLabel("SYNCED LYRICS"))
-        root.addView(chipRow(listOf(
-            Triple("🎤 Lyrics On", lyricsVisible) {
-                if (!lyricsVisible) toggleLyricsOverlay()
-                Toast.makeText(this, "Synced Lyrics: On", Toast.LENGTH_SHORT).show()
-            },
-            Triple("Lyrics Off", !lyricsVisible) {
-                if (lyricsVisible) toggleLyricsOverlay()
-                Toast.makeText(this, "Synced Lyrics: Off", Toast.LENGTH_SHORT).show()
-            }
-        )))
-
         // ----- Sleep Timer section -----
         root.addView(sectionLabel("SLEEP TIMER"))
         val sleepRem = PlaybackCenter.sleepTimerRemainingMs
@@ -740,11 +727,12 @@ class NowPlayingActivity : AppCompatActivity() {
         }))
 
         val eqPresets = listOf(
-            Triple("🎛 Flat", 3, curEq == 3),
-            Triple("🔊 Bass Boost", 4, curEq == 4),
-            Triple("🎙 Vocal Studio", 5, curEq == 5),
-            Triple("⚡ Club", 6, curEq == 6),
-            Triple("✨ Treble", 7, curEq == 7)
+            Triple("🔊 Speaker Box", 3, curEq == 3),
+            Triple("🎛 Flat", 4, curEq == 4),
+            Triple("💥 Bass Boost", 5, curEq == 5),
+            Triple("🎙 Vocal Studio", 6, curEq == 6),
+            Triple("⚡ Club", 7, curEq == 7),
+            Triple("✨ Treble", 8, curEq == 8)
         )
         root.addView(chipRow(eqPresets.take(3).map { (label, index, active) ->
             Triple(label, active) {

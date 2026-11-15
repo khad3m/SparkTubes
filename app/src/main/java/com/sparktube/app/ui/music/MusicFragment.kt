@@ -154,19 +154,50 @@ class MusicFragment : Fragment(), ScrollsToTop {
 
     private fun showPlaylistMusicPicker() {
         val ctx = requireContext()
-        val playlists = LocalStore.playlists(ctx).filter { it.items.isNotEmpty() }
-        if (playlists.isEmpty()) {
-            Toast.makeText(ctx, "No playlists with songs yet", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val names = playlists.map { "${it.name} (${it.items.size})" }.toTypedArray()
+        val playlists = LocalStore.playlists(ctx)
+        val labels = (listOf("+ Create New Playlist") + playlists.map { "${it.name} (${it.items.size})" }).toTypedArray()
         androidx.appcompat.app.AlertDialog.Builder(ctx)
-            .setTitle("Play Playlist as Music")
-            .setItems(names) { _, which ->
-                val chosen = playlists[which]
-                val entries = chosen.items.map { it.toUiModel().toQueueEntry(isMusic = true) }
-                PlaybackCenter.playMusicQueue(entries, 0, allowRadio = true)
-                NowPlayingActivity.start(ctx)
+            .setTitle("Music Playlists")
+            .setItems(labels) { _, which ->
+                if (which == 0) {
+                    showCreatePlaylistDialog()
+                } else {
+                    val chosen = playlists[which - 1]
+                    if (chosen.items.isEmpty()) {
+                        Toast.makeText(ctx, "This playlist is empty — tap ••• on any song to add", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val entries = chosen.items.map { it.toUiModel().toQueueEntry(isMusic = true) }
+                        PlaybackCenter.playMusicQueue(entries, 0, allowRadio = true)
+                        NowPlayingActivity.start(ctx)
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showCreatePlaylistDialog() {
+        val ctx = requireContext()
+        val d = resources.displayMetrics.density
+        val input = android.widget.EditText(ctx).apply {
+            hint = getString(R.string.new_playlist_hint)
+            setSingleLine()
+        }
+        val wrap = FrameLayout(ctx).apply {
+            setPadding((22 * d).toInt(), (10 * d).toInt(), (22 * d).toInt(), 0)
+            addView(input)
+        }
+        androidx.appcompat.app.AlertDialog.Builder(ctx)
+            .setTitle(R.string.new_playlist)
+            .setView(wrap)
+            .setPositiveButton(R.string.create_playlist) { _, _ ->
+                val name = input.text?.toString()?.trim().orEmpty()
+                when {
+                    name.isEmpty() -> Toast.makeText(ctx, R.string.playlist_name_empty, Toast.LENGTH_SHORT).show()
+                    LocalStore.createPlaylist(ctx, name) == null ->
+                        Toast.makeText(ctx, R.string.playlist_name_exists, Toast.LENGTH_SHORT).show()
+                    else -> Toast.makeText(ctx, "Playlist "$name" created! Tap ••• on any song to add.", Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()

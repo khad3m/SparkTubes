@@ -91,39 +91,59 @@ data class AudioTrackGroup(
     val best: AudioStream? get() = streams.filter { it.isUrl }.maxByOrNull { it.averageBitrate }
 }
 
-class StreamCatalog(info: StreamInfo, requestedUrl: String = "") {
+class StreamCatalog private constructor(
+    val url: String,
+    val videoId: String,
+    val name: String,
+    val uploaderUrl: String,
+    val uploaderName: String,
+    val uploaderAvatarUrl: String,
+    val viewCount: Long,
+    val durationSec: Long,
+    val description: String,
+    val descriptionIsHtml: Boolean,
+    val uploadDateText: String,
+    val likeCount: Long,
+    rawVideoOnly: List<VideoStream>,
+    rawMuxed: List<VideoStream>,
+    rawAudio: List<AudioStream>,
+    rawSubtitles: List<SubtitlesStream>,
+    rawRelated: List<StreamInfoItem>
+) {
+    constructor(info: StreamInfo, requestedUrl: String = "") : this(
+        url = info.url?.takeIf { it.isNotBlank() } ?: requestedUrl,
+        videoId = DownloadCenter.videoIdOf((info.url?.takeIf { it.isNotBlank() } ?: requestedUrl)),
+        name = info.name ?: "",
+        uploaderUrl = info.uploaderUrl ?: "",
+        uploaderName = info.uploaderName ?: "",
+        uploaderAvatarUrl = info.uploaderAvatars.maxByOrNull { it.height }?.url.orEmpty(),
+        viewCount = info.viewCount,
+        durationSec = info.duration,
+        description = info.description?.content.orEmpty(),
+        descriptionIsHtml = info.description?.type == org.schabi.newpipe.extractor.stream.Description.HTML,
+        uploadDateText = com.sparktube.app.util.Formatters.formatRelativeTime(info.textualUploadDate),
+        likeCount = info.likeCount,
+        rawVideoOnly = info.videoOnlyStreams,
+        rawMuxed = info.videoStreams,
+        rawAudio = info.audioStreams,
+        rawSubtitles = info.subtitles,
+        rawRelated = info.relatedItems
+    )
 
-    val url: String = info.url?.takeIf { it.isNotBlank() } ?: requestedUrl
-    val videoId: String = DownloadCenter.videoIdOf(url.ifBlank { requestedUrl })
-    val name: String = info.name ?: ""
-    val uploaderUrl: String = info.uploaderUrl ?: ""
-    val uploaderName: String = info.uploaderName ?: ""
-    val uploaderAvatarUrl: String = info.uploaderAvatars.maxByOrNull { it.height }?.url.orEmpty()
-    val viewCount: Long = info.viewCount
-    val durationSec: Long = info.duration
-
-    val description: String = info.description?.content.orEmpty()
-    val descriptionIsHtml: Boolean =
-        info.description?.type == org.schabi.newpipe.extractor.stream.Description.HTML
-
-    val uploadDateText: String =
-        com.sparktube.app.util.Formatters.formatRelativeTime(info.textualUploadDate)
-    val likeCount: Long = info.likeCount
-
-    val videoOnly: List<VideoStream> = info.videoOnlyStreams
+    val videoOnly: List<VideoStream> = rawVideoOnly
         .filter { it.isUrl && it.effectiveHeight() > 0 }
         .distinctBy { it.effectiveHeight() }
         .sortedByDescending { it.effectiveHeight() }
 
-    val allVideoOnly: List<VideoStream> = info.videoOnlyStreams
+    val allVideoOnly: List<VideoStream> = rawVideoOnly
         .filter { it.isUrl && it.effectiveHeight() > 0 }
 
-    val muxed: List<VideoStream> = info.videoStreams
+    val muxed: List<VideoStream> = rawMuxed
         .filter { it.isUrl && it.effectiveHeight() > 0 }
         .distinctBy { it.effectiveHeight() }
         .sortedByDescending { it.effectiveHeight() }
 
-    val audioTracks: List<AudioTrackGroup> = info.audioStreams
+    val audioTracks: List<AudioTrackGroup> = rawAudio
         .filter { it.isUrl }
         .groupBy { it.audioTrackId ?: it.audioTrackName ?: "default" }
         .map { (id, streams) ->
@@ -138,18 +158,116 @@ class StreamCatalog(info: StreamInfo, requestedUrl: String = "") {
         }
         .sortedWith(compareByDescending<AudioTrackGroup> { it.isOriginal }.thenBy { it.label })
 
-    val subtitles: List<SubtitlesStream> = info.subtitles
+    val subtitles: List<SubtitlesStream> = rawSubtitles
         .filter { it.isUrl && !it.content.isNullOrBlank() }
 
     /** Up-next / related list. Falls back to a search-based list when YouTube returns none. */
     @Volatile
-    var related: List<StreamInfoItem> = LiveFilter.sanitize(info.relatedItems)
+    var related: List<StreamInfoItem> = LiveFilter.sanitize(rawRelated)
 
     val hasVideo: Boolean get() = videoOnly.isNotEmpty() || muxed.isNotEmpty()
 
     companion object {
         fun resolutionHeight(resolution: String): Int =
             Regex("(\\d{3,4})").find(resolution)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+        fun fromPlayerJson(root: org.json.JSONObject, requestedUrl: String): StreamCatalog? {
+            val sd = root.optJSONObject("streamingData") ?: return null
+            val vd = root.optJSONObject("videoDetails")
+            val vid = vd?.optString("videoId")?.takeIf { it.isNotBlank() }
+                ?: DownloadCenter.videoIdOf(requestedUrl)
+            val canonicalUrl = requestedUrl.takeIf { it.startsWith("http") }
+                ?: "https://www.youtube.com/watch?v=$vid"
+
+            val videoOnlyList = mutableListOf<VideoStream>()
+            val muxedList = mutableListOf<VideoStream>()
+            val audioList = mutableListOf<AudioStream>()
+
+            fun parseFormats(arr: org.json.JSONArray?, isMuxed: Boolean) {
+                if (arr == null) return
+                for (i in 0 until arr.length()) {
+                    val fmt = arr.optJSONObject(i) ?: continue
+                    val streamUrl = fmt.optString("url", "")
+                    if (!streamUrl.startsWith("http")) continue
+                    val itag = fmt.optInt("itag", 0)
+                    val mime = fmt.optString("mimeType", "").lowercase()
+                    val itagItem = runCatching {
+                        org.schabi.newpipe.extractor.services.youtube.ItagItem.getItag(itag)
+                    }.getOrNull()
+                    if (mime.startsWith("video/")) {
+                        val height = fmt.optInt("height", 0)
+                        val resLabel = fmt.optString("qualityLabel", "").ifBlank {
+                            if (height > 0) "${height}p" else ""
+                        }
+                        val format = when {
+                            mime.contains("webm") -> org.schabi.newpipe.extractor.MediaFormat.WEBM
+                            else -> org.schabi.newpipe.extractor.MediaFormat.MPEG_4
+                        }
+                        val vs = runCatching {
+                            VideoStream.Builder()
+                                .setId(itag.toString())
+                                .setContent(streamUrl, true)
+                                .setMediaFormat(format)
+                                .setResolution(resLabel)
+                                .setIsVideoOnly(!isMuxed)
+                                .apply { if (itagItem != null) setItagItem(itagItem) }
+                                .build()
+                        }.getOrNull() ?: continue
+                        if (isMuxed) muxedList.add(vs) else videoOnlyList.add(vs)
+                    } else if (mime.startsWith("audio/")) {
+                        val format = when {
+                            mime.contains("webm") || mime.contains("opus") -> org.schabi.newpipe.extractor.MediaFormat.WEBMA
+                            else -> org.schabi.newpipe.extractor.MediaFormat.M4A
+                        }
+                        val bitrate = fmt.optInt("averageBitrate", 0)
+                            .takeIf { it > 0 } ?: fmt.optInt("bitrate", 128_000)
+                        val trackObj = fmt.optJSONObject("audioTrack")
+                        val trackId = trackObj?.optString("id")?.takeIf { it.isNotBlank() }
+                        val trackName = trackObj?.optString("displayName")?.takeIf { it.isNotBlank() }
+                        val aStream = runCatching {
+                            AudioStream.Builder()
+                                .setId(itag.toString())
+                                .setContent(streamUrl, true)
+                                .setMediaFormat(format)
+                                .setAverageBitrate(bitrate / 1000)
+                                .apply {
+                                    if (trackId != null) setAudioTrackId(trackId)
+                                    if (trackName != null) setAudioTrackName(trackName)
+                                    if (itagItem != null) setItagItem(itagItem)
+                                }
+                                .build()
+                        }.getOrNull() ?: continue
+                        audioList.add(aStream)
+                    }
+                }
+            }
+
+            parseFormats(sd.optJSONArray("formats"), isMuxed = true)
+            parseFormats(sd.optJSONArray("adaptiveFormats"), isMuxed = false)
+
+            if (videoOnlyList.isEmpty() && muxedList.isEmpty() && audioList.isEmpty()) return null
+
+            return StreamCatalog(
+                url = canonicalUrl,
+                videoId = vid,
+                name = vd?.optString("title").orEmpty(),
+                uploaderUrl = vd?.optString("channelId")?.takeIf { it.isNotBlank() }
+                    ?.let { "https://www.youtube.com/channel/$it" }.orEmpty(),
+                uploaderName = vd?.optString("author").orEmpty(),
+                uploaderAvatarUrl = "",
+                viewCount = vd?.optString("viewCount")?.toLongOrNull() ?: -1L,
+                durationSec = vd?.optString("lengthSeconds")?.toLongOrNull() ?: 0L,
+                description = vd?.optString("shortDescription").orEmpty(),
+                descriptionIsHtml = false,
+                uploadDateText = "",
+                likeCount = -1L,
+                rawVideoOnly = videoOnlyList,
+                rawMuxed = muxedList,
+                rawAudio = audioList,
+                rawSubtitles = emptyList(),
+                rawRelated = emptyList()
+            )
+        }
     }
 
     fun qualityLabel(v: VideoStream): String {
@@ -179,6 +297,7 @@ object PlaybackCenter {
         "Off (Disabled)",
         "Noise Cancel",
         "Only Vocal",
+        "Speaker Box",
         "Flat (Default)",
         "Bass Boost",
         "Vocal Studio",
@@ -287,47 +406,63 @@ object PlaybackCenter {
 
     fun applyAudioPreset(presetIndex: Int, @Suppress("UNUSED_PARAMETER") label: String = "") {
         currentEqPresetIndex = presetIndex.coerceIn(0, EQ_PRESET_LABELS.size - 1)
+        syncDspMode(currentEqPresetIndex)
         val sessionId = playerRef?.audioSessionId ?: return
         bindAudioEffectsForSession(sessionId)
+    }
+
+    private fun syncDspMode(preset: Int) {
+        SparkAudioProcessor.mode = when (preset) {
+            1 -> SparkAudioProcessor.Mode.NOISE_CANCEL
+            2 -> SparkAudioProcessor.Mode.ONLY_VOCAL
+            else -> SparkAudioProcessor.Mode.OFF
+        }
     }
 
     /** Gain (dB) for a band centred at [freqHz] for the given preset. */
     private fun presetGainDb(preset: Int, freqHz: Int): Float = when (preset) {
         1 -> when { // Noise Cancel: cut low-end rumble & high-frequency hiss
-            freqHz <= 120 -> -8f
+            freqHz <= 120 -> -10f
             freqHz <= 300 -> -3f
             freqHz <= 1200 -> 1f
             freqHz <= 4000 -> 2f
-            else -> -7f
+            else -> -8f
         }
-        2 -> when { // Only Vocal: isolate vocal frequencies, suppress bass & cymbals
-            freqHz <= 200 -> -12f
-            freqHz <= 450 -> -6f
+        2 -> when { // Only Vocal: hard-cut bass & cymbals, boost human vocal formants
+            freqHz <= 250 -> -15f
+            freqHz <= 500 -> -8f
             freqHz <= 3500 -> 6f
-            freqHz <= 6000 -> 1f
-            else -> -9f
+            freqHz <= 6000 -> -2f
+            else -> -12f
         }
-        4 -> when { // Bass Boost
+        3 -> when { // Speaker Box: punchy bass, clean low-mids, clear vocals & crisp highs
+            freqHz <= 120 -> 6f
+            freqHz <= 350 -> 1f
+            freqHz <= 1200 -> 2f
+            freqHz <= 3500 -> 3.5f
+            else -> 4.5f
+        }
+        5 -> when { // Bass Boost
             freqHz <= 120 -> 6f
             freqHz <= 300 -> 4f
             freqHz <= 800 -> 1f
             else -> 0f
         }
-        5 -> when { // Vocal Studio
+        6 -> when { // Vocal Studio
             freqHz <= 120 -> -2f
             freqHz <= 400 -> 0f
             freqHz <= 1500 -> 3f
             freqHz <= 5000 -> 4f
             else -> 1f
         }
-        6 -> when { // Club Electronic
+        7 -> when { // Club Electronic
             freqHz <= 120 -> 5f
             freqHz <= 400 -> 2f
             freqHz <= 2000 -> -2f
             freqHz <= 6000 -> 2f
             else -> 5f
         }
-        7 -> when { // Treble Clarity
+        8 -> when { // Treble Clarity
             freqHz <= 400 -> -1f
             freqHz <= 2000 -> 0f
             freqHz <= 6000 -> 3f
@@ -337,14 +472,16 @@ object PlaybackCenter {
     }
 
     private fun bassStrengthFor(preset: Int): Short = when (preset) {
-        4 -> 700
-        6 -> 450
+        3 -> 850 // Speaker Box
+        5 -> 700 // Bass Boost
+        7 -> 450 // Club
         else -> 0
     }
 
     private fun bindAudioEffectsForSession(sessionId: Int) {
         if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId <= 0) return
         val preset = currentEqPresetIndex
+        syncDspMode(preset)
 
         if (preset == 0) {
             runCatching { equalizer?.enabled = false }
@@ -565,7 +702,19 @@ object PlaybackCenter {
      */
     private val renderersFactory: DefaultRenderersFactory
         get() {
-            val factory = DefaultRenderersFactory(appContext)
+            val factory = object : DefaultRenderersFactory(appContext) {
+                override fun buildAudioSink(
+                    context: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean
+                ): androidx.media3.exoplayer.audio.AudioSink {
+                    return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessors(arrayOf(SparkAudioProcessor))
+                        .build()
+                }
+            }
             if (!AppPrefs.hardwareAcceleration) {
                 factory.setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
                     val all = MediaCodecSelector.DEFAULT
@@ -766,6 +915,29 @@ object PlaybackCenter {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                val msg = (e.message ?: "").lowercase()
+                val ageGated = e is org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException ||
+                    e is org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException ||
+                    msg.contains("age") || msg.contains("anonymously") || msg.contains("sign in") || msg.contains("login")
+                if (ageGated && !first.url.startsWith("file://")) {
+                    val vid = DownloadCenter.videoIdOf(first.url)
+                    val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                            ?.let { StreamCatalog.fromPlayerJson(it, first.url) }
+                    }
+                    if (direct != null && currentEntry?.url == first.url) {
+                        catalog = direct
+                        LocalStore.addToMusicHistory(appContext, first.toVideoEntry())
+                        RecommendEngine.logPlay(appContext, first.url, first.title, first.uploader)
+                        primeMusicUri(first, direct)
+                        startMusicPlaylistWithRelated()
+                        ensureService()
+                        notify { it.onItemChanged(currentEntry) }
+                        notify { it.onCatalogReady() }
+                        prefetchAhead()
+                        return@launch
+                    }
+                }
                 if (e is LiveContentException) {
                     notify { it.onLiveContentBlocked() }
                 } else {
@@ -1354,20 +1526,18 @@ object PlaybackCenter {
                 val msg = (e.message ?: "").lowercase()
                 val ageGated = e is org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException ||
                     e is org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException ||
-                    msg.contains("age") || msg.contains("sign in") ||
+                    msg.contains("age") || msg.contains("anonymously") || msg.contains("sign in") ||
                     msg.contains("logged") || msg.contains("log in") ||
                     msg.contains("confirm your age") || msg.contains("login")
-                if (ageGated && !entry.url.startsWith("file://") &&
-                    YouTubeAuth.isLoggedIn() && !usedSignedInRetry
-                ) {
+                if (ageGated && !entry.url.startsWith("file://") && !usedSignedInRetry) {
                     usedSignedInRetry = true
-                    com.sparktube.app.net.YouTubePlayerUnlock.forceUnlockForUrl(entry.url)
-                    catalog = null
-                    try {
-                        val info = YtRepository.streamInfo(entry.url)
-                        if (LiveFilter.isLive(info)) throw LiveContentException()
-                        if (currentEntry?.url != entry.url) return@launch
-                        catalog = StreamCatalog(info, entry.url)
+                    val vid = DownloadCenter.videoIdOf(entry.url)
+                    val directCatalog = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                            ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                    }
+                    if (directCatalog != null && currentEntry?.url == entry.url) {
+                        catalog = directCatalog
                         LocalStore.addToHistory(appContext, entry.toVideoEntry())
                         RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
                         applySources(playbackSpeed)
@@ -1376,11 +1546,6 @@ object PlaybackCenter {
                         maybeFetchRelatedFallback()
                         extendQueueFromRelated()
                         ensureService()
-                        return@launch
-                    } catch (e2: CancellationException) {
-                        throw e2
-                    } catch (e2: Exception) {
-                        notify { it.onError(if (e2.message.isNullOrBlank()) e.javaClass.simpleName else e2.message!!) }
                         return@launch
                     }
                 }
@@ -1933,11 +2098,17 @@ object PlaybackCenter {
         val entry = pendingMusic[key]
             ?: throw IOException("Playlist item vanished: $key")
         musicUriCache[entry.url]?.let { return it }
-        val info = runBlocking { YtRepository.streamInfo(entry.url) }
-        if (LiveFilter.isLive(info)) {
-            throw LiveContentException()
+        val c = runCatching {
+            val info = runBlocking { YtRepository.streamInfo(entry.url) }
+            if (LiveFilter.isLive(info)) throw LiveContentException()
+            StreamCatalog(info, entry.url)
+        }.getOrElse { err ->
+            if (err is LiveContentException) throw err
+            val vid = DownloadCenter.videoIdOf(entry.url)
+            YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                ?: throw err
         }
-        val c = StreamCatalog(info, entry.url)
         val audio = pickMusicAudio(c)
             ?: throw IOException("No audio stream found")
         return cacheMusicUri(entry.url, audio.content)
