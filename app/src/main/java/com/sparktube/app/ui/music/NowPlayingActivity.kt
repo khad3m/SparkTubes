@@ -689,11 +689,11 @@ class NowPlayingActivity : AppCompatActivity() {
         root.addView(sectionLabel("SYNCED LYRICS"))
         root.addView(chipRow(listOf(
             Triple("🎤 Lyrics On", lyricsVisible) {
-                if (!lyricsVisible) toggleLyrics()
+                if (!lyricsVisible) toggleLyricsOverlay()
                 Toast.makeText(this, "Synced Lyrics: On", Toast.LENGTH_SHORT).show()
             },
             Triple("Lyrics Off", !lyricsVisible) {
-                if (lyricsVisible) toggleLyrics()
+                if (lyricsVisible) toggleLyricsOverlay()
                 Toast.makeText(this, "Synced Lyrics: Off", Toast.LENGTH_SHORT).show()
             }
         )))

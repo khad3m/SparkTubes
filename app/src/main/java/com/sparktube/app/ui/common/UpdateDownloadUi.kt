@@ -189,7 +189,7 @@ object UpdateDownloadUi {
             addView(TextView(activity).apply {
                 text = rawBody
                 textSize = 13f
-                lineSpacingMultiplier = 1.25f
+                setLineSpacing(0f, 1.25f)
                 setTextColor(0xF2FFFFFF.toInt())
             })
         })
@@ -341,7 +341,7 @@ object UpdateDownloadUi {
             TextView(activity).apply {
                 text = "নিচের \"এখনই ইনস্টল করুন\" বাটনে ট্যাপ করলে নতুন ভার্সনটি ইনস্টল হবে। আপনার সব সেভ করা ডেটা ও প্লেলিস্ট সুরক্ষিত থাকবে।"
                 textSize = 13f
-                lineSpacingMultiplier = 1.25f
+                setLineSpacing(0f, 1.25f)
                 setTextColor(0xE6FFFFFF.toInt())
                 setBackgroundResource(R.drawable.bg_glass_reddish_tile)
                 setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12))
