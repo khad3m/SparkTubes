@@ -90,12 +90,18 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:background="@drawable/bg_card_soft"
+            android:drawablePadding="12dp"
+            android:drawableTint="@color/on_surface_variant"
+            android:drawableTop="@drawable/ic_download"
             android:gravity="center"
-            android:paddingStart="24dp"
-            android:paddingTop="16dp"
-            android:paddingEnd="24dp"
-            android:paddingBottom="16dp"
+            android:lineSpacingExtra="2dp"
+            android:minWidth="220dp"
+            android:paddingStart="32dp"
+            android:paddingTop="28dp"
+            android:paddingEnd="32dp"
+            android:paddingBottom="28dp"
             android:textColor="@color/on_surface_variant"
+            android:textSize="14sp"
             android:visibility="gone" />
     </FrameLayout>
 </LinearLayout>

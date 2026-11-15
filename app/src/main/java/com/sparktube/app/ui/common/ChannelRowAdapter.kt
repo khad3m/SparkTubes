@@ -32,7 +32,9 @@ class ChannelRowAdapter(
     class VH(val binding: ItemChannelRowBinding) : RecyclerView.ViewHolder(binding.root)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
-        VH(ItemChannelRowBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+        VH(ItemChannelRowBinding.inflate(LayoutInflater.from(parent.context), parent, false).also {
+            com.sparktube.app.ui.music.Motion.pressable(it.root, 0.98f)
+        })
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = getItem(position)

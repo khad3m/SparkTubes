@@ -63,6 +63,37 @@ class DownloadSheet(
         return if (mime.contains("webm") || suffix == "webm" || suffix == "opus") "webm" else "m4a"
     }
 
+    /** Best-effort size in bytes of one stream (exact contentLength, else bitrate x duration). */
+    private fun streamBytes(stream: org.schabi.newpipe.extractor.stream.Stream, durationSec: Long): Long {
+        val item = runCatching { stream.itagItem }.getOrNull() ?: return 0L
+        val len = runCatching { item.contentLength }.getOrDefault(-1L)
+        if (len > 0L) return len
+        val bps = runCatching { item.bitrate }.getOrDefault(0)
+        return if (bps > 0 && durationSec > 0L) bps.toLong() * durationSec / 8L else 0L
+    }
+
+    private fun sizeText(bytes: Long): String = when {
+        bytes <= 0L -> ""
+        bytes >= 1024L * 1024L * 1024L ->
+            String.format(java.util.Locale.US, " • %.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024L ->
+            String.format(java.util.Locale.US, " • %.1f MB", bytes / (1024.0 * 1024.0))
+        else -> String.format(java.util.Locale.US, " • %d KB", bytes / 1024L)
+    }
+
+    /** For the merged Video+Audio download prefer H.264/MP4 video: it can be remuxed into one file. */
+    private fun bestVideoForHeight(height: Int): org.schabi.newpipe.extractor.stream.VideoStream? =
+        catalog.allVideoOnly
+            .filter { it.effectiveHeight() == height }
+            .sortedWith(
+                compareByDescending<org.schabi.newpipe.extractor.stream.VideoStream> {
+                    val mime = it.format?.mimeType.orEmpty().lowercase()
+                    val codec = it.codec.orEmpty().lowercase()
+                    mime.contains("mp4") && (codec.startsWith("avc") || codec.isBlank())
+                }.thenByDescending { runCatching { it.itagItem?.bitrate ?: 0 }.getOrDefault(0) }
+            )
+            .firstOrNull()
+
     private fun audioFormatTag(stream: AudioStream): String =
         if (audioExtOf(stream) == "webm") "Opus" else "M4A"
 
@@ -132,7 +163,7 @@ class DownloadSheet(
                     val rowLabel = when {
                         alreadyDone -> "$qualityKey • ${context.getString(R.string.download_option_done)}"
                         inFlightPct >= 0 -> "$qualityKey • ${context.getString(R.string.downloading_fmt, inFlightPct)}"
-                        else -> qualityKey + suffix(audioTrack)
+                        else -> qualityKey + sizeText(streamBytes(stream, durationSec)) + suffix(audioTrack)
                     }
                     root.addView(
                         optionRow(rowLabel, alreadyDone || inFlightPct >= 0) {
@@ -183,14 +214,16 @@ class DownloadSheet(
                     .filter { it.isUrl && audioExtOf(it) == "m4a" }
                     .maxByOrNull { it.averageBitrate }
                     ?: audioTrack.best!!
-                catalog.videoOnly.forEach { v ->
+                catalog.videoOnly.forEach { listed ->
+                    val v = bestVideoForHeight(listed.effectiveHeight()) ?: listed
                     val quality = "${v.effectiveHeight()}p"
+                    val avSize = streamBytes(v, durationSec) + streamBytes(bestM4aAudio, durationSec)
                     val alreadyDone = downloaded(DownloadCenter.TYPE_AV, quality)
                     val inFlightPct = activeProgress(DownloadCenter.TYPE_AV, quality)
                     val rowLabel = when {
                         alreadyDone -> "$quality (Video + Audio) • ${context.getString(R.string.download_option_done)}"
                         inFlightPct >= 0 -> "$quality (Video + Audio) • ${context.getString(R.string.downloading_fmt, inFlightPct)}"
-                        else -> "$quality (Video + Audio)"
+                        else -> "$quality (Video + Audio)" + sizeText(avSize)
                     }
                     root.addView(
                         optionRow(rowLabel, alreadyDone || inFlightPct >= 0) {
@@ -241,7 +274,7 @@ class DownloadSheet(
                 val rowLabel = when {
                     alreadyDone -> "$label • ${context.getString(R.string.download_option_done)}"
                     inFlightPct >= 0 -> "$label • ${context.getString(R.string.downloading_fmt, inFlightPct)}"
-                    else -> label
+                    else -> label + sizeText(streamBytes(v, durationSec))
                 }
                 root.addView(
                     optionRow(rowLabel, alreadyDone || inFlightPct >= 0) {

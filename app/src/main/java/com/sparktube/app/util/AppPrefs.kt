@@ -12,6 +12,7 @@ object AppPrefs {
     private const val KEY_THEME = "theme"
     private const val KEY_ACCENT = "accent"
     private const val KEY_VIDEO_AUTOPLAY_NEXT = "video_autoplay_next"
+    private const val KEY_EQ_PRESET = "eq_preset_index"
     private const val KEY_SMART_STREAMING = "smart_streaming"
     private const val KEY_MUSIC_AUDIO_QUALITY = "music_audio_quality"
     private const val KEY_MUSIC_AUTOPLAY_NEXT = "music_autoplay_next"
@@ -126,6 +127,13 @@ object AppPrefs {
         get() = sp.getBoolean(KEY_SMART_STREAMING, true)
         set(value) {
             sp.edit().putBoolean(KEY_SMART_STREAMING, value).apply()
+        }
+
+    /** Selected equalizer preset (0 = Flat). Persisted so it survives restarts and new tracks. */
+    var eqPresetIndex: Int
+        get() = sp.getInt(KEY_EQ_PRESET, 0)
+        set(value) {
+            sp.edit().putInt(KEY_EQ_PRESET, value).apply()
         }
 
     var videoAutoplayNext: Boolean

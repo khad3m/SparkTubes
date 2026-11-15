@@ -159,6 +159,25 @@ class NowPlayingActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
 
         binding.backButton.setOnClickListener { finish() }
+        installArtGestures()
+        binding.shuffleButton.setOnClickListener { view ->
+            bounceButton(view)
+            val on = PlaybackCenter.toggleShuffle()
+            updateRepeatShuffleButtons()
+            Toast.makeText(this, if (on) "Shuffle on" else "Shuffle off", Toast.LENGTH_SHORT).show()
+        }
+        binding.repeatButton.setOnClickListener { view ->
+            bounceButton(view)
+            val mode = PlaybackCenter.cycleRepeatMode()
+            updateRepeatShuffleButtons()
+            Toast.makeText(
+                this,
+                when (mode) { 1 -> "Repeat all"; 2 -> "Repeat one"; else -> "Repeat off" },
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        PlaybackCenter.applyRepeatShuffle()
+        updateRepeatShuffleButtons()
 
         binding.lyricsText.movementMethod = LinkMovementMethod.getInstance()
         binding.lyricsText.highlightColor = Color.TRANSPARENT
@@ -326,6 +345,79 @@ class NowPlayingActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Album art gestures: swipe left/right = next/previous track (art slides out and back in),
+     * double-tap left/right half = seek -10s / +10s. Disabled while lyrics are open so lyrics can scroll.
+     */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun installArtGestures() {
+        val density = resources.displayMetrics.density
+        val detector = android.view.GestureDetector(
+            this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: MotionEvent): Boolean = true
+
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                    if (lyricsVisible) return false
+                    val forward = e.x >= binding.artContainer.width / 2f
+                    val dur = PlaybackCenter.durationMs
+                    val pos = PlaybackCenter.positionMs
+                    val target = if (forward) pos + 10_000L else (pos - 10_000L).coerceAtLeast(0L)
+                    PlaybackCenter.seekTo(if (dur > 0L) target.coerceAtMost(dur) else target)
+                    binding.art.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    val nudge = (if (forward) 14 else -14) * density
+                    binding.art.animate().translationX(nudge).setDuration(90).withEndAction {
+                        binding.art.animate().translationX(0f)
+                            .setInterpolator(OvershootInterpolator(2.4f)).setDuration(220).start()
+                    }.start()
+                    return true
+                }
+
+                override fun onFling(
+                    e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float
+                ): Boolean {
+                    if (lyricsVisible || e1 == null) return false
+                    val dx = e2.x - e1.x
+                    val dy = e2.y - e1.y
+                    if (kotlin.math.abs(dx) > 72 * density &&
+                        kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.5f &&
+                        kotlin.math.abs(velocityX) > 700f
+                    ) {
+                        swipeTrack(next = dx < 0)
+                        return true
+                    }
+                    return false
+                }
+            }
+        )
+        binding.artContainer.setOnTouchListener { _, e -> detector.onTouchEvent(e) }
+    }
+
+    private fun updateRepeatShuffleButtons() {
+        val green = getColor(R.color.music_green)
+        val dim = Color.argb(140, 255, 255, 255)
+        binding.shuffleButton.setColorFilter(if (AppPrefs.musicShuffle) green else dim)
+        val mode = AppPrefs.musicRepeatMode
+        binding.repeatButton.setImageResource(
+            if (mode == 2) R.drawable.ic_repeat_one else R.drawable.ic_repeat
+        )
+        binding.repeatButton.setColorFilter(if (mode != 0) green else dim)
+    }
+
+    private fun swipeTrack(next: Boolean) {
+        val art = binding.art
+        art.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        val dist = 80 * resources.displayMetrics.density
+        val dir = if (next) -1f else 1f
+        art.animate().cancel()
+        art.animate().translationX(dir * dist).alpha(0.3f).setDuration(120).withEndAction {
+            if (next) PlaybackCenter.next() else PlaybackCenter.previous()
+            art.translationX = -dir * dist
+            art.animate().translationX(0f).alpha(1f)
+                .setInterpolator(DecelerateInterpolator(1.6f)).setDuration(240).start()
+        }.start()
+    }
+
     private fun bounceButton(view: View) {
         view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         view.animate().cancel()
@@ -346,6 +438,11 @@ class NowPlayingActivity : AppCompatActivity() {
 
     private fun toggleLyricsOverlay() {
         lyricsVisible = !lyricsVisible
+        // A failed/empty earlier lookup must not be permanent: retry when the user opens lyrics.
+        if (lyricsVisible && currentLyrics == null) {
+            lyricsForUrl = null
+            PlaybackCenter.currentEntry?.let { fetchLyricsIfNeeded(it) }
+        }
         binding.lyricsOverlay.isVisible = lyricsVisible
         binding.art.alpha = if (lyricsVisible) 0.16f else 1f
         binding.lyricsButton.alpha = if (lyricsVisible) 1f else 0.8f
@@ -414,7 +511,7 @@ class NowPlayingActivity : AppCompatActivity() {
         lyricsJob?.cancel()
         lyricsJob = lifecycleScope.launch {
             val cached = loadOfflineLrc(entry.url)
-            val res = cached ?: YtRepository.fetchSyncedLyrics(entry.title, entry.uploader)?.also {
+            val res = cached ?: YtRepository.fetchSyncedLyrics(entry.title, entry.uploader, entry.durationSec)?.also {
                 saveOfflineLrcIfNeeded(entry.url, it)
             }
             if (lyricsForUrl != entry.url) return@launch
@@ -567,25 +664,30 @@ class NowPlayingActivity : AppCompatActivity() {
                     updateCenterStatusBadge()
                     Toast.makeText(this, "Sleep timer off", Toast.LENGTH_SHORT).show()
                 },
-                ActionSheet.Item("🎛 EQ: Bass Boost (+8 dB)", accent = true) {
-                    PlaybackCenter.applyAudioPreset(1, "Bass Boost")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Bass Boost Active", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Vocal & Acoustic") {
-                    PlaybackCenter.applyAudioPreset(2, "Vocal Studio")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Vocal Studio Active", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Electronic / Club") {
-                    PlaybackCenter.applyAudioPreset(3, "Club Electronic")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Club Electronic Active", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Flat (Default)") {
-                    PlaybackCenter.applyAudioPreset(0, "Flat (Default)")
+                ActionSheet.Item("🎛 EQ: Flat (Default)", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Flat")) {
+                    PlaybackCenter.applyAudioPreset(0, "Flat")
                     updateCenterStatusBadge()
                     Toast.makeText(this, "Audio EQ: Flat", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Bass Boost", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Bass")) {
+                    PlaybackCenter.applyAudioPreset(1, "Bass Boost")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Bass Boost", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Vocal & Acoustic", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Vocal")) {
+                    PlaybackCenter.applyAudioPreset(2, "Vocal Studio")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Vocal Studio", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Electronic / Club", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Club")) {
+                    PlaybackCenter.applyAudioPreset(3, "Club Electronic")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Club Electronic", Toast.LENGTH_SHORT).show()
+                },
+                ActionSheet.Item("🎛 EQ: Treble / Clarity", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Treble")) {
+                    PlaybackCenter.applyAudioPreset(4, "Treble Clarity")
+                    updateCenterStatusBadge()
+                    Toast.makeText(this, "Audio EQ: Treble Clarity", Toast.LENGTH_SHORT).show()
                 }
             )
         )

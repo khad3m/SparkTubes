@@ -61,7 +61,9 @@ class DownloadAdapter(
     class VH(val binding: ItemDownloadBinding) : RecyclerView.ViewHolder(binding.root)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
-        VH(ItemDownloadBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+        VH(ItemDownloadBinding.inflate(LayoutInflater.from(parent.context), parent, false).also {
+            com.sparktube.app.ui.music.Motion.pressable(it.root, 0.98f)
+        })
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val ui = getItem(position)

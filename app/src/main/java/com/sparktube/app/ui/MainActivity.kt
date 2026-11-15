@@ -12,6 +12,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import android.view.ViewGroup
+import androidx.core.widget.NestedScrollView
+import androidx.recyclerview.widget.RecyclerView
+import android.widget.ScrollView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.sparktube.app.BuildConfig
@@ -67,6 +71,8 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
         maybeSilentUpdateCheck()
 
+        listOf(binding.navHome, binding.navMusic, binding.navLibrary, binding.navMenu)
+            .forEach { com.sparktube.app.ui.music.Motion.pressable(it, 0.92f) }
         binding.navHome.setOnClickListener { select(R.id.navHome) }
         binding.navMusic.setOnClickListener { select(R.id.navMusic) }
         binding.navLibrary.setOnClickListener { select(R.id.navLibrary) }
@@ -79,20 +85,71 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.miniPlayPause.setOnClickListener { PlaybackCenter.togglePlayPause() }
+        binding.miniPlayPause.setOnClickListener {
+            it.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+            PlaybackCenter.togglePlayPause()
+        }
         binding.miniClose.setOnClickListener {
             PlaybackCenter.stopPlayback()
         }
-        binding.miniPlayer.setOnClickListener {
-            PlaybackCenter.currentEntry ?: return@setOnClickListener
-            if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO || PlaybackCenter.audioOnlyMode) {
-                NowPlayingActivity.start(this)
-            } else {
-                PlayerActivity.startResume(this)
-            }
-        }
+        binding.miniPlayer.setOnClickListener { openPlayerFromMini() }
+        installMiniPlayerGestures()
+
+        // Keep scrollable content clear of the floating nav + mini player, whatever their height.
+        val relayout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyBottomClearance() }
+        binding.floatingNav.addOnLayoutChangeListener(relayout)
+        binding.miniPlayer.addOnLayoutChangeListener(relayout)
+        supportFragmentManager.registerFragmentLifecycleCallbacks(
+            object : androidx.fragment.app.FragmentManager.FragmentLifecycleCallbacks() {
+                override fun onFragmentViewCreated(
+                    fm: androidx.fragment.app.FragmentManager,
+                    f: Fragment,
+                    v: View,
+                    savedInstanceState: Bundle?
+                ) {
+                    v.post { applyBottomClearance() }
+                }
+            },
+            false
+        )
 
         applySelection()
+    }
+
+    /**
+     * Bottom space (px) taken by the floating nav and, when shown, the mini player above it.
+     */
+    private fun bottomClearancePx(): Int {
+        val rootH = binding.root.height
+        if (rootH <= 0) return 0
+        val navTop = if (binding.floatingNav.height > 0) binding.floatingNav.top else rootH
+        val top = if (binding.miniPlayer.isVisible && binding.miniPlayer.height > 0) {
+            minOf(navTop, binding.miniPlayer.top)
+        } else navTop
+        return (rootH - top).coerceAtLeast(0)
+    }
+
+    private fun applyBottomClearance() {
+        if (!::binding.isInitialized) return
+        val clearance = bottomClearancePx() + (12 * resources.displayMetrics.density).toInt()
+        applyClearanceTo(binding.container, clearance)
+    }
+
+    private fun applyClearanceTo(view: View, clearance: Int) {
+        val verticalList = view is RecyclerView &&
+            (view.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager)
+                ?.orientation == androidx.recyclerview.widget.RecyclerView.VERTICAL
+        if (view is ScrollView || view is NestedScrollView || verticalList) {
+            val g = view as ViewGroup
+            g.clipToPadding = false
+            if (g.paddingBottom != clearance) {
+                g.setPadding(g.paddingLeft, g.paddingTop, g.paddingRight, clearance)
+            }
+            return
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) applyClearanceTo(view.getChildAt(i), clearance)
+        }
     }
 
     /** Runs once per app session if "Auto check for updates" is enabled in Settings. */
@@ -203,7 +260,81 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun openPlayerFromMini() {
+        PlaybackCenter.currentEntry ?: return
+        if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO || PlaybackCenter.audioOnlyMode) {
+            NowPlayingActivity.start(this)
+        } else {
+            PlayerActivity.startResume(this)
+        }
+    }
+
+    /**
+     * Mini player gestures: swipe UP opens the full player, swipe LEFT/RIGHT dismisses it
+     * (the card follows the finger). A plain tap still opens the player via the click listener.
+     */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun installMiniPlayerGestures() {
+        val density = resources.displayMetrics.density
+        val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+        val openDist = 48 * density
+        var downX = 0f
+        var downY = 0f
+        var horizontal = false
+        binding.miniPlayer.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; horizontal = false
+                    false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    if (!horizontal && kotlin.math.abs(dx) > slop * 2 && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                        horizontal = true
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    if (horizontal) {
+                        v.translationX = dx
+                        v.alpha = (1f - kotlin.math.abs(dx) / (v.width * 0.9f)).coerceIn(0.2f, 1f)
+                        true
+                    } else false
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    when {
+                        horizontal && kotlin.math.abs(dx) > v.width * 0.35f &&
+                            e.actionMasked == android.view.MotionEvent.ACTION_UP -> {
+                            val dir = if (dx > 0) 1 else -1
+                            v.animate().translationX(dir * v.width.toFloat()).alpha(0f)
+                                .setDuration(160).withEndAction {
+                                    PlaybackCenter.stopPlayback()
+                                    v.translationX = 0f
+                                    v.alpha = 1f
+                                }.start()
+                            true
+                        }
+                        horizontal -> {
+                            v.animate().translationX(0f).alpha(1f).setDuration(180).start()
+                            true
+                        }
+                        e.actionMasked == android.view.MotionEvent.ACTION_UP &&
+                            -dy > openDist && kotlin.math.abs(dy) > kotlin.math.abs(dx) -> {
+                            v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                            openPlayerFromMini()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                else -> false
+            }
+        }
+    }
+
     private fun select(id: Int) {
+        binding.floatingNav.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
         if (id == selectedId) {
             (fragments[id] as? ScrollsToTop)?.scrollToTop()
             return
@@ -244,6 +375,21 @@ class MainActivity : AppCompatActivity() {
         binding.navMusic.isSelected = isActive(binding.navMusic)
         binding.navLibrary.isSelected = isActive(binding.navLibrary)
         binding.navMenu.isSelected = isActive(binding.navMenu)
+        bounceSelectedNavIcon()
+    }
+
+    /** Small spring on the newly selected tab's icon (skipped when animations are off). */
+    private fun bounceSelectedNavIcon() {
+        if (!AppPrefs.animations || !com.sparktube.app.ui.music.Motion.animatorsEnabled()) return
+        val tab = listOf(binding.navHome, binding.navMusic, binding.navLibrary, binding.navMenu)
+            .firstOrNull { it.id == selectedId } as? android.view.ViewGroup ?: return
+        val icon = tab.getChildAt(0) ?: return
+        icon.animate().cancel()
+        icon.scaleX = 0.8f
+        icon.scaleY = 0.8f
+        icon.animate().scaleX(1f).scaleY(1f)
+            .setInterpolator(android.view.animation.OvershootInterpolator(2.5f))
+            .setDuration(280).start()
     }
 
     private fun createFragment(id: Int): Fragment = when (id) {

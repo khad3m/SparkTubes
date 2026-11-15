@@ -332,6 +332,33 @@ object YtRepository {
             info
         }
 
+    /**
+     * Search-based "related videos" used when the extractor returns an empty related list.
+     * Uses the video title (+ uploader) so results stay on-topic.
+     */
+    suspend fun relatedFallback(title: String, uploader: String, excludeUrl: String): List<StreamInfoItem> {
+        val cleanTitle = title
+            .replace(Regex("\\(.*?\\)|\\[.*?]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { title }
+        if (cleanTitle.isBlank()) return emptyList()
+        val excludeId = extractVideoId(excludeUrl)
+        val queries = listOf(cleanTitle, "$cleanTitle ${uploader.removeSuffix(" - Topic")}".trim())
+        val seen = LinkedHashSet<String>()
+        val out = ArrayList<StreamInfoItem>()
+        for (q in queries) {
+            val res = runCatching { searchVideos(q).items }.getOrDefault(emptyList())
+            for (item in res) {
+                val id = extractVideoId(item.url ?: "") ?: continue
+                if (id == excludeId || !seen.add(id)) continue
+                out.add(item)
+            }
+            if (out.size >= 15) break
+        }
+        return out.take(20)
+    }
+
     suspend fun suggestions(query: String): List<String> =
         withContext(Dispatchers.IO) {
             if (query.isBlank()) {
@@ -701,50 +728,118 @@ object YtRepository {
      * Queries LRCLIB (`https://lrclib.net/api/search`) for time-synced `.lrc` lyrics
      * matching the track title and artist. Cleans YouTube noise ("Official Video", "Lyrics", etc.).
      */
-    suspend fun fetchSyncedLyrics(rawTitle: String, rawArtist: String): LyricsResult? =
-        withContext(Dispatchers.IO) {
-            try {
-                val cleanTitle = rawTitle
-                    .replace(Regex("\\(.*?\\)|\\[.*?]"), " ")
-                    .replace(Regex("(?i)official\\s*(music\\s*)?(video|audio|lyric\\s*video)|lyrics?|4k|hd|full\\s*song"), " ")
-                    .trim()
-                    .ifBlank { rawTitle }
-                val cleanArtist = rawArtist
-                    .removeSuffix(" - Topic")
-                    .replace(Regex("(?i)official|vevo"), "")
-                    .trim()
+    suspend fun fetchSyncedLyrics(
+        rawTitle: String,
+        rawArtist: String,
+        durationSec: Long = 0L
+    ): LyricsResult? = withContext(Dispatchers.IO) {
+        try {
+            val (title, artist) = cleanTrackAndArtist(rawTitle, rawArtist)
+            if (title.isBlank()) return@withContext null
 
-                val q = URLEncoder.encode("$cleanTitle $cleanArtist".trim(), "UTF-8")
-                val conn = URL("https://lrclib.net/api/search?q=$q").openConnection() as HttpURLConnection
-                conn.connectTimeout = 8_000
-                conn.readTimeout = 8_000
-                conn.setRequestProperty("User-Agent", "SparkTube/1.6.0 (https://github.com/khad3m/SparkTubes)")
-                if (conn.responseCode != 200) {
-                    conn.disconnect()
-                    return@withContext null
-                }
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
-                val arr = JSONArray(body)
-                if (arr.length() == 0) return@withContext null
+            fun enc(v: String) = URLEncoder.encode(v, "UTF-8")
 
-                var bestSynced = ""
-                var bestPlain = ""
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    val s = obj.optString("syncedLyrics", "")
-                    val p = obj.optString("plainLyrics", "")
-                    if (s.isNotBlank() && bestSynced.isBlank()) bestSynced = s
-                    if (p.isNotBlank() && bestPlain.isBlank()) bestPlain = p
-                    if (bestSynced.isNotBlank()) break
-                }
-                val parsed = parseLrc(bestSynced)
-                if (parsed.isEmpty() && bestPlain.isBlank()) return@withContext null
-                LyricsResult(parsed, bestPlain)
-            } catch (e: Exception) {
-                null
+            // 1) Exact lookup (best accuracy, uses duration to pick the right version)
+            if (artist.isNotBlank()) {
+                val dur = if (durationSec > 0L) "&duration=$durationSec" else ""
+                lrclibGet("https://lrclib.net/api/get?track_name=${enc(title)}&artist_name=${enc(artist)}$dur")
+                    ?.let { obj -> toLyricsResult(listOf(obj))?.let { return@withContext it } }
+            }
+            // 2) Structured search
+            if (artist.isNotBlank()) {
+                lrclibSearch("https://lrclib.net/api/search?track_name=${enc(title)}&artist_name=${enc(artist)}")
+                    ?.let { arr -> toLyricsResult(sortByDuration(arr, durationSec))?.let { return@withContext it } }
+            }
+            // 3) Title only
+            lrclibSearch("https://lrclib.net/api/search?track_name=${enc(title)}")
+                ?.let { arr -> toLyricsResult(sortByDuration(arr, durationSec))?.let { return@withContext it } }
+            // 4) Free-text fallback
+            lrclibSearch("https://lrclib.net/api/search?q=${enc("$title $artist".trim())}")
+                ?.let { arr -> toLyricsResult(sortByDuration(arr, durationSec))?.let { return@withContext it } }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Strips YouTube noise and splits "Artist - Song" titles. */
+    private fun cleanTrackAndArtist(rawTitle: String, rawArtist: String): Pair<String, String> {
+        var title = rawTitle
+        var artist = rawArtist
+            .removeSuffix(" - Topic")
+            .replace(Regex("(?i)\\bvevo\\b|\\bofficial\\b"), "")
+            .trim()
+
+        // "Artist - Song" style titles
+        val dash = Regex("\\s[-\u2013\u2014|]\\s").find(title)
+        if (dash != null) {
+            val left = title.substring(0, dash.range.first).trim()
+            val right = title.substring(dash.range.last + 1).trim()
+            if (left.isNotBlank() && right.isNotBlank()) {
+                artist = left
+                title = right
             }
         }
+        title = title
+            .replace(Regex("\\(.*?\\)|\\[.*?]|\\{.*?}"), " ")
+            .replace(Regex("(?i)\\b(official|music|video|audio|lyrics?|lyrical|full\\s*song|hd|hq|4k|mv|visualizer|remastered)\\b"), " ")
+            .replace(Regex("(?i)\\b(feat|ft)\\.?\\s.*$"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { rawTitle.trim() }
+        artist = artist
+            .replace(Regex("(?i)\\b(feat|ft)\\.?\\s.*$"), "")
+            .split(Regex("\\s*[,&]\\s*|\\s+x\\s+"))
+            .firstOrNull()
+            .orEmpty()
+            .trim()
+        return title to artist
+    }
+
+    private fun lrclibRequest(url: String): String? {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        return try {
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 10_000
+            conn.setRequestProperty("User-Agent", "SparkTube/1.6.3 (https://github.com/devfahim00/SparkTube)")
+            conn.setRequestProperty("Accept", "application/json")
+            if (conn.responseCode != 200) null
+            else conn.inputStream.bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun lrclibGet(url: String): JSONObject? =
+        lrclibRequest(url)?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+    private fun lrclibSearch(url: String): List<JSONObject>? {
+        val arr = lrclibRequest(url)?.let { runCatching { JSONArray(it) }.getOrNull() } ?: return null
+        if (arr.length() == 0) return null
+        return (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+    }
+
+    private fun sortByDuration(items: List<JSONObject>, durationSec: Long): List<JSONObject> {
+        if (durationSec <= 0L) return items
+        return items.sortedBy { kotlin.math.abs(it.optDouble("duration", 0.0) - durationSec.toDouble()) }
+    }
+
+    private fun toLyricsResult(items: List<JSONObject>): LyricsResult? {
+        var bestSynced = ""
+        var bestPlain = ""
+        for (obj in items) {
+            val sy = obj.optString("syncedLyrics", "")
+            val pl = obj.optString("plainLyrics", "")
+            if (sy.isNotBlank() && bestSynced.isBlank() && sy != "null") bestSynced = sy
+            if (pl.isNotBlank() && bestPlain.isBlank() && pl != "null") bestPlain = pl
+            if (bestSynced.isNotBlank()) break
+        }
+        val parsed = parseLrc(bestSynced)
+        if (parsed.isEmpty() && bestPlain.isBlank()) return null
+        return LyricsResult(parsed, bestPlain)
+    }
 
     private fun parseLrc(lrc: String): List<LyricLine> {
         if (lrc.isBlank()) return emptyList()

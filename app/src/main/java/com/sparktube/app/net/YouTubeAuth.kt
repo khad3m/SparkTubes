@@ -171,6 +171,14 @@ object YouTubeAuth {
             clientParam.startsWith("ANDROID") -> {
                 headers["User-Agent"] = UA_ANDROID
             }
+            clientParam == "TVHTML5" || clientParam == "TVHTML5_SIMPLY" -> {
+                headers["User-Agent"] = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
+                headers["Origin"] = "https://www.youtube.com"
+                headers["Referer"] = "https://www.youtube.com/"
+                if (isLoggedIn()) {
+                    headers["Cookie"] = buildCookieHeader()
+                }
+            }
             clientParam.startsWith("TVHTML5") -> {
                 headers["User-Agent"] = UA_TV_EMBED
                 headers["Origin"] = "https://www.youtube.com"

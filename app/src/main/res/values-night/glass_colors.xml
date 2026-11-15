@@ -5,7 +5,8 @@
     <color name="glass_bottom">#08FFFFFF</color>
     <color name="glass_stroke">#14FFFFFF</color>
     <color name="accent_text">#FF4D6A</color>
-    <color name="nav_glass_top">#8C24242C</color>
-    <color name="nav_glass_bottom">#66121217</color>
+    <color name="nav_glass_top">#F2262630</color>
+    <color name="nav_glass_bottom">#F214141A</color>
     <color name="glass_sheet">#D916161B</color>
+    <color name="nav_stroke">#33FFFFFF</color>
 </resources>

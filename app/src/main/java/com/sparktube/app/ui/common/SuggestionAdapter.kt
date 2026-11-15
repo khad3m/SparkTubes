@@ -35,7 +35,9 @@ class SuggestionAdapter(
     class VH(val binding: ItemSuggestionBinding) : RecyclerView.ViewHolder(binding.root)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
-        VH(ItemSuggestionBinding.inflate(LayoutInflater.from(parent.context), parent, false))
+        VH(ItemSuggestionBinding.inflate(LayoutInflater.from(parent.context), parent, false).also {
+            com.sparktube.app.ui.music.Motion.pressable(it.root, 0.98f)
+        })
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val row = getItem(position)

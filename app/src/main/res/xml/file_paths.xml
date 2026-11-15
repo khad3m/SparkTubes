@@ -13,4 +13,9 @@
     <files-path
         name="crash_logs_internal"
         path="SparkTube/" />
+    <!-- Finished downloads (Movies / Music / Download / custom folder) so the
+         "Open" action on the completion notification can hand them to a player. -->
+    <external-path
+        name="external_all"
+        path="." />
 </paths>

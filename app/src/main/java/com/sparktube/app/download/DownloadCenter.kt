@@ -655,6 +655,42 @@ object DownloadCenter {
 
     private fun onRecordCompleted(context: Context, record: DownloadRecord) {
         val ctx = appCtx ?: context.applicationContext
+        // Video+Audio downloads arrive as two files (video-only + audio-only). External players
+        // (MX Player, Gallery) only play the video one, so merge them into a single .mp4 first.
+        if (record.type == TYPE_AV && record.filePaths.size >= 2) {
+            scope.launch(Dispatchers.IO) {
+                val merged = mergeAvRecord(ctx, record)
+                finishCompletedRecord(ctx, merged ?: record)
+            }
+            return
+        }
+        finishCompletedRecord(ctx, record)
+    }
+
+    /** @return the updated single-file record, or null if merging failed (two files are kept). */
+    private fun mergeAvRecord(ctx: Context, record: DownloadRecord): DownloadRecord? {
+        return runCatching {
+            val videoFile = File(record.filePaths[0])
+            val audioFile = File(record.filePaths[1])
+            if (!videoFile.exists() || !audioFile.exists()) return null
+            val outName = videoFile.name.removeSuffix("_v.mp4") + ".mp4"
+            val outFile = File(videoFile.parentFile, outName)
+            if (!AvMuxer.merge(videoFile, audioFile, outFile)) return null
+            runCatching { videoFile.delete() }
+            runCatching { audioFile.delete() }
+            runCatching { partMetaFileFor(videoFile).delete() }
+            runCatching { partMetaFileFor(audioFile).delete() }
+            synchronized(syncLock) {
+                val cur = LocalStore.downloads(ctx).firstOrNull { it.downloadIds == record.downloadIds }
+                    ?: return null
+                val updated = cur.copy(filePaths = listOf(outFile.absolutePath))
+                LocalStore.updateDownloadRecord(ctx, updated)
+                updated
+            }
+        }.getOrNull()
+    }
+
+    private fun finishCompletedRecord(ctx: Context, record: DownloadRecord) {
         // Index files in Android MediaStore so they immediately show up in Gallery / Music / File Manager
         val existingPaths = record.filePaths.filter { File(it).exists() }.toTypedArray()
         if (existingPaths.isNotEmpty()) {
@@ -676,6 +712,71 @@ object DownloadCenter {
                 "${ctx.getString(R.string.download_status_done)} • ${AppPrefs.downloadFolderSummary().substringAfterLast('/')}",
                 Toast.LENGTH_SHORT
             ).show()
+        }
+        postCompletionNotification(ctx, record)
+    }
+
+    private const val NOTIF_CHANNEL_DOWNLOADS = "sparktube_downloads_done"
+
+    /** "Download complete" notification with tap-to-open-app and an Open (play) action. */
+    private fun postCompletionNotification(ctx: Context, record: DownloadRecord) {
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    ctx, android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) return
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            if (android.os.Build.VERSION.SDK_INT >= 26 &&
+                nm.getNotificationChannel(NOTIF_CHANNEL_DOWNLOADS) == null
+            ) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        NOTIF_CHANNEL_DOWNLOADS,
+                        "Downloads",
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT
+                    )
+                )
+            }
+            val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                android.app.PendingIntent.FLAG_IMMUTABLE
+            val id = (record.downloadIds.firstOrNull()?.hashCode() ?: record.title.hashCode())
+            val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+            val open = launch?.let { android.app.PendingIntent.getActivity(ctx, id, it, flags) }
+
+            val builder = androidx.core.app.NotificationCompat.Builder(ctx, NOTIF_CHANNEL_DOWNLOADS)
+                .setSmallIcon(R.drawable.ic_download)
+                .setContentTitle(record.title)
+                .setContentText(ctx.getString(R.string.download_status_done))
+                .setAutoCancel(true)
+                .setCategory(androidx.core.app.NotificationCompat.CATEGORY_STATUS)
+                .apply { open?.let { setContentIntent(it) } }
+
+            val file = record.filePaths.firstOrNull()?.let { File(it) }
+            if (file != null && file.exists()) {
+                // FileProvider can't serve every location (e.g. an SD card); never let that
+                // block the notification itself.
+                runCatching {
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        ctx, "${ctx.packageName}.fileprovider", file
+                    )
+                    val mime = when (file.extension.lowercase()) {
+                        "m4a", "mp3", "aac", "opus", "ogg" -> "audio/*"
+                        else -> "video/*"
+                    }
+                    val view = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                        .setDataAndType(uri, mime)
+                        .addFlags(
+                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        )
+                    builder.addAction(
+                        R.drawable.ic_download, "Open",
+                        android.app.PendingIntent.getActivity(ctx, id + 1, view, flags)
+                    )
+                }
+            }
+            nm.notify(id, builder.build())
         }
     }
 

@@ -138,7 +138,9 @@ class StreamCatalog(info: StreamInfo, requestedUrl: String = "") {
     val subtitles: List<SubtitlesStream> = info.subtitles
         .filter { it.isUrl && !it.content.isNullOrBlank() }
 
-    val related: List<StreamInfoItem> = LiveFilter.sanitize(info.relatedItems)
+    /** Up-next / related list. Falls back to a search-based list when YouTube returns none. */
+    @Volatile
+    var related: List<StreamInfoItem> = LiveFilter.sanitize(info.relatedItems)
 
     val hasVideo: Boolean get() = videoOnly.isNotEmpty() || muxed.isNotEmpty()
 
@@ -168,6 +170,11 @@ class StreamCatalog(info: StreamInfo, requestedUrl: String = "") {
  */
 @OptIn(UnstableApi::class)
 object PlaybackCenter {
+
+    /** Equalizer presets; index is what [AppPrefs.eqPresetIndex] stores. */
+    val EQ_PRESET_LABELS = listOf(
+        "Flat (Default)", "Bass Boost", "Vocal Studio", "Club Electronic", "Treble Clarity"
+    )
 
     enum class Mode { NONE, VIDEO, AUDIO }
 
@@ -224,9 +231,13 @@ object PlaybackCenter {
     private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var boundAudioSessionId: Int = C.AUDIO_SESSION_ID_UNSET
-    private var currentEqPresetIndex: Int = 0
-    var currentEqPresetLabel: String = "Flat (Default)"
-        private set
+    private var currentEqPresetIndex: Int
+        get() = runCatching { AppPrefs.eqPresetIndex }.getOrDefault(0)
+        set(value) {
+            runCatching { AppPrefs.eqPresetIndex = value }
+        }
+    val currentEqPresetLabel: String
+        get() = EQ_PRESET_LABELS.getOrElse(currentEqPresetIndex) { EQ_PRESET_LABELS[0] }
 
     // ----- Smooth Audio Crossfade Engine -----
     private var crossfadeMonitorJob: Job? = null
@@ -255,51 +266,84 @@ object PlaybackCenter {
         }
     }
 
-    fun applyAudioPreset(presetIndex: Int, label: String) {
-        currentEqPresetIndex = presetIndex
-        currentEqPresetLabel = label
+    fun applyAudioPreset(presetIndex: Int, @Suppress("UNUSED_PARAMETER") label: String = "") {
+        currentEqPresetIndex = presetIndex.coerceIn(0, EQ_PRESET_LABELS.size - 1)
         val sessionId = playerRef?.audioSessionId ?: return
         bindAudioEffectsForSession(sessionId)
     }
 
+    /** Gain (dB) for a band centred at [freqHz] for the given preset. */
+    private fun presetGainDb(preset: Int, freqHz: Int): Float = when (preset) {
+        1 -> when { // Bass Boost
+            freqHz <= 120 -> 6f
+            freqHz <= 300 -> 4f
+            freqHz <= 800 -> 1f
+            else -> 0f
+        }
+        2 -> when { // Vocal / Acoustic
+            freqHz <= 120 -> -2f
+            freqHz <= 400 -> 0f
+            freqHz <= 1500 -> 3f
+            freqHz <= 5000 -> 4f
+            else -> 1f
+        }
+        3 -> when { // Electronic / Club
+            freqHz <= 120 -> 5f
+            freqHz <= 400 -> 2f
+            freqHz <= 2000 -> -2f
+            freqHz <= 6000 -> 2f
+            else -> 5f
+        }
+        4 -> when { // Treble / Clarity
+            freqHz <= 400 -> -1f
+            freqHz <= 2000 -> 0f
+            freqHz <= 6000 -> 3f
+            else -> 5f
+        }
+        else -> 0f // Flat
+    }
+
+    private fun bassStrengthFor(preset: Int): Short = when (preset) {
+        1 -> 700
+        3 -> 450
+        else -> 0
+    }
+
     private fun bindAudioEffectsForSession(sessionId: Int) {
         if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId <= 0) return
-        try {
-            if (boundAudioSessionId != sessionId) {
-                runCatching { equalizer?.release() }
-                runCatching { bassBoost?.release() }
-                equalizer = null
-                bassBoost = null
-                boundAudioSessionId = sessionId
+        val preset = currentEqPresetIndex
+
+        if (boundAudioSessionId != sessionId) {
+            runCatching { equalizer?.release() }
+            runCatching { bassBoost?.release() }
+            equalizer = null
+            bassBoost = null
+            boundAudioSessionId = sessionId
+        }
+
+        // Equalizer and BassBoost are applied independently: one failing (not every
+        // device supports both) must not stop the other from working.
+        runCatching {
+            if (equalizer == null) equalizer = Equalizer(0, sessionId)
+            val eq = equalizer ?: return@runCatching
+            val range = eq.bandLevelRange // millibels [min, max]
+            val minMb = range[0].toInt()
+            val maxMb = range[1].toInt()
+            for (band in 0 until eq.numberOfBands) {
+                val freqHz = eq.getCenterFreq(band.toShort()) / 1000
+                val mb = (presetGainDb(preset, freqHz) * 100f).toInt().coerceIn(minMb, maxMb)
+                eq.setBandLevel(band.toShort(), mb.toShort())
             }
-            if (equalizer == null) {
-                equalizer = Equalizer(0, sessionId).apply { enabled = true }
+            eq.enabled = true
+        }
+
+        runCatching {
+            if (bassBoost == null) bassBoost = BassBoost(0, sessionId)
+            val bb = bassBoost ?: return@runCatching
+            if (bb.strengthSupported) {
+                bb.setStrength(bassStrengthFor(preset))
+                bb.enabled = bassStrengthFor(preset) > 0
             }
-            if (bassBoost == null) {
-                bassBoost = BassBoost(0, sessionId).apply { enabled = true }
-            }
-            val eq = equalizer ?: return
-            val bb = bassBoost
-            when (currentEqPresetIndex) {
-                0 -> { // Flat
-                    if (eq.numberOfPresets > 0) eq.usePreset(0)
-                    bb?.setStrength(0.toShort())
-                }
-                1 -> { // Bass Boost
-                    bb?.setStrength(800.toShort())
-                }
-                2 -> { // Vocal / Acoustic
-                    val n = eq.numberOfPresets.toInt()
-                    if (n > 1) eq.usePreset((1 % n).toShort())
-                    bb?.setStrength(250.toShort())
-                }
-                3 -> { // Electronic / Club
-                    val n = eq.numberOfPresets.toInt()
-                    if (n > 2) eq.usePreset((2 % n).toShort())
-                    bb?.setStrength(650.toShort())
-                }
-            }
-        } catch (_: Exception) {
         }
     }
 
@@ -470,12 +514,11 @@ object PlaybackCenter {
         }
 
         override fun onAudioSessionIdChanged(audioSessionId: Int) {
-            if (currentEqPresetIndex != 0 || equalizer != null) {
-                bindAudioEffectsForSession(audioSessionId)
-            }
+            bindAudioEffectsForSession(audioSessionId)
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_READY) applyRepeatShuffle()
             if (playbackState == Player.STATE_ENDED && mode == Mode.VIDEO &&
                 (playlistMode || AppPrefs.videoAutoplayNext)
             ) {
@@ -755,6 +798,38 @@ object PlaybackCenter {
 
     fun applyMusicAutoplay() {
         playerRef?.setPauseAtEndOfMediaItems(!AppPrefs.musicAutoplayNext)
+    }
+
+    /** Pushes the saved repeat / shuffle choice onto the player. */
+    fun applyRepeatShuffle() {
+        val audio = mode == Mode.AUDIO
+        playerRef?.run {
+            val wantRepeat = if (audio) {
+                when (AppPrefs.musicRepeatMode) {
+                    1 -> androidx.media3.common.Player.REPEAT_MODE_ALL
+                    2 -> androidx.media3.common.Player.REPEAT_MODE_ONE
+                    else -> androidx.media3.common.Player.REPEAT_MODE_OFF
+                }
+            } else androidx.media3.common.Player.REPEAT_MODE_OFF // video uses its own queue logic
+            val wantShuffle = audio && AppPrefs.musicShuffle
+            if (repeatMode != wantRepeat) repeatMode = wantRepeat
+            if (shuffleModeEnabled != wantShuffle) shuffleModeEnabled = wantShuffle
+        }
+    }
+
+    /** off -> all -> one -> off. @return the new mode (0/1/2). */
+    fun cycleRepeatMode(): Int {
+        val next = (AppPrefs.musicRepeatMode + 1) % 3
+        AppPrefs.musicRepeatMode = next
+        applyRepeatShuffle()
+        return next
+    }
+
+    fun toggleShuffle(): Boolean {
+        val on = !AppPrefs.musicShuffle
+        AppPrefs.musicShuffle = on
+        applyRepeatShuffle()
+        return on
     }
 
     fun next() {
@@ -1242,6 +1317,18 @@ object PlaybackCenter {
                 if (currentEntry?.url != entry.url) return@launch
                 val resolvedCatalog = StreamCatalog(info, entry.url)
                 catalog = resolvedCatalog
+                if (resolvedCatalog.related.isEmpty()) {
+                    // YouTube sometimes returns no "related" block (new layout / signed-in session).
+                    scope.launch {
+                        val fallback = runCatching {
+                            YtRepository.relatedFallback(entry.title, entry.uploader, entry.url)
+                        }.getOrDefault(emptyList())
+                        if (fallback.isNotEmpty() && catalog === resolvedCatalog) {
+                            resolvedCatalog.related = fallback
+                            notify { it.onCatalogReady() }
+                        }
+                    }
+                }
                 LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
                 RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
                 primeMusicUri(entry, resolvedCatalog)
@@ -1656,6 +1743,7 @@ object PlaybackCenter {
             playWhenReady = true
             setPlaybackSpeed(playbackSpeed)
             applyMusicAutoplay()
+            applyRepeatShuffle()
         }
         if (radioMode && items.size < RADIO_MIN_UPCOMING) {
             topUpRadioFromSearch(first)

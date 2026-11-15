@@ -348,8 +348,12 @@ class PlayerActivity : AppCompatActivity() {
             isLocked = { isScreenLocked },
             onLockedTap = { revealUnlockPillTemporarily() },
             onMinimize = { finish() },
-            onDoubleTapSeek = { forward ->
-                showGestureSeekPill(if (forward) "⏩ +10s" else "⏪ -10s", autoHide = true)
+            onDoubleTapSeek = { forward, totalSec ->
+                showGestureSeekPill(if (forward) "⏩ +${totalSec}s" else "⏪ -${totalSec}s", autoHide = true)
+            },
+            onScrub = { text ->
+                if (text != null) showGestureSeekPill(text, autoHide = false)
+                else downloadHandler.post(hidePillRunnable)
             },
             onSpeedHoldChanged = { holding2x ->
                 if (holding2x) {

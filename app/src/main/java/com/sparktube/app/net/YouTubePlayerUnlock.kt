@@ -4,6 +4,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Collections
@@ -27,6 +28,9 @@ import java.util.Collections
  */
 object YouTubePlayerUnlock {
 
+    private const val TAG = "PlayerUnlock"
+    private const val TV_VERSION = "7.20250312.16.00"
+    private const val WEB_EMBED_VERSION = "1.20250310.01.00"
     private const val PLAYER_ENDPOINT = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTypeOrNull()
 
@@ -88,19 +92,24 @@ object YouTubePlayerUnlock {
             }
 
             val loggedIn = YouTubeAuth.isLoggedIn()
+            // Age-restricted videos need a client that accepts the signed-in session
+            // (TV / embedded clients). ANDROID_VR / IOS never accept cookies, so they
+            // only help for videos that are merely bot-checked, not age-gated.
             val candidates = if (loggedIn) {
                 listOf(
-                    FallbackSpec("ANDROID_VR", useCookies = true),
+                    FallbackSpec("TVHTML5", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
+                    FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
+                    FallbackSpec("TVHTML5_SIMPLY", useCookies = true),
                     FallbackSpec("ANDROID_VR", useCookies = false),
                     FallbackSpec("IOS", useCookies = false),
-                    FallbackSpec("WEB_AUTH", useCookies = true),
                     FallbackSpec("ANDROID_TESTSUITE", useCookies = false)
                 )
             } else {
                 listOf(
                     FallbackSpec("ANDROID_VR", useCookies = false),
                     FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = false),
+                    FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = false),
                     FallbackSpec("IOS", useCookies = false),
                     FallbackSpec("ANDROID_TESTSUITE", useCookies = false)
                 )
@@ -108,7 +117,13 @@ object YouTubePlayerUnlock {
 
             var bestFallback: JSONObject? = null
             for (spec in candidates) {
-                val fb = fetchFallbackPlayer(videoId, spec, httpClient) ?: continue
+                val fb = fetchFallbackPlayer(videoId, spec, httpClient, reqJson) ?: continue
+                val st = fb.optJSONObject("playabilityStatus")
+                Log.d(
+                    TAG,
+                    "$videoId ${spec.kind} cookies=${spec.useCookies} status=${st?.optString("status")} " +
+                        "reason=${st?.optString("reason")} playable=${isPlayableWithDirectUrls(fb)}"
+                )
                 if (isPlayableWithDirectUrls(fb)) {
                     bestFallback = fb
                     break
@@ -143,8 +158,7 @@ object YouTubePlayerUnlock {
         if (adaptive != null) {
             for (i in 0 until adaptive.length()) {
                 val fmt = adaptive.optJSONObject(i) ?: continue
-                val u = fmt.optString("url", "")
-                if (!u.startsWith("http")) continue
+                if (!fmt.optString("url", "").startsWith("http")) continue
                 val mime = fmt.optString("mimeType", "")
                 if (mime.startsWith("video/")) directVideo++
                 else if (mime.startsWith("audio/")) directAudio++
@@ -154,8 +168,7 @@ object YouTubePlayerUnlock {
         if (muxed != null) {
             for (i in 0 until muxed.length()) {
                 val fmt = muxed.optJSONObject(i) ?: continue
-                val u = fmt.optString("url", "")
-                if (u.startsWith("http")) {
+                if (fmt.optString("url", "").startsWith("http")) {
                     directVideo++
                     directAudio++
                 }
@@ -163,6 +176,12 @@ object YouTubePlayerUnlock {
         }
         return directVideo > 0 && directAudio > 0
     }
+
+    /** A format is usable if it has a direct URL or a (decryptable) signature cipher. */
+    private fun hasStreamSource(fmt: JSONObject): Boolean =
+        fmt.optString("url", "").startsWith("http") ||
+            fmt.optString("signatureCipher", "").isNotBlank() ||
+            fmt.optString("cipher", "").isNotBlank()
 
     private fun hasAnyStreamingData(root: JSONObject): Boolean {
         val status = root.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
@@ -176,9 +195,16 @@ object YouTubePlayerUnlock {
     private fun fetchFallbackPlayer(
         videoId: String,
         spec: FallbackSpec,
-        httpClient: OkHttpClient
+        httpClient: OkHttpClient,
+        origRequest: JSONObject?
     ): JSONObject? = runCatching {
         val payload = buildClientPayload(videoId, spec.kind)
+        // Reuse the signatureTimestamp / PO token NewPipe already built for this request so
+        // ciphered URLs from the fallback client can be decrypted with the same player JS.
+        origRequest?.optJSONObject("playbackContext")?.let { payload.put("playbackContext", it) }
+        origRequest?.optJSONObject("serviceIntegrityDimensions")?.let {
+            payload.put("serviceIntegrityDimensions", it)
+        }
         val reqBuilder = Request.Builder()
             .url(PLAYER_ENDPOINT)
             .header("Content-Type", "application/json")
@@ -189,6 +215,27 @@ object YouTubePlayerUnlock {
                 reqBuilder.header("User-Agent", YouTubeAuth.UA_ANDROID_VR)
                 reqBuilder.header("X-YouTube-Client-Name", "28")
                 reqBuilder.header("X-YouTube-Client-Version", "1.60.19")
+            }
+            "TVHTML5" -> {
+                reqBuilder.header("User-Agent", "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version")
+                reqBuilder.header("X-YouTube-Client-Name", "7")
+                reqBuilder.header("X-YouTube-Client-Version", TV_VERSION)
+                reqBuilder.header("Origin", "https://www.youtube.com")
+                reqBuilder.header("Referer", "https://www.youtube.com/tv")
+            }
+            "TVHTML5_SIMPLY" -> {
+                reqBuilder.header("User-Agent", "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version")
+                reqBuilder.header("X-YouTube-Client-Name", "75")
+                reqBuilder.header("X-YouTube-Client-Version", "1.0")
+                reqBuilder.header("Origin", "https://www.youtube.com")
+                reqBuilder.header("Referer", "https://www.youtube.com/tv")
+            }
+            "WEB_EMBEDDED_PLAYER" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_WEB_CHROME)
+                reqBuilder.header("X-YouTube-Client-Name", "56")
+                reqBuilder.header("X-YouTube-Client-Version", WEB_EMBED_VERSION)
+                reqBuilder.header("Origin", "https://www.youtube.com")
+                reqBuilder.header("Referer", "https://www.youtube.com/embed/$videoId")
             }
             "TVHTML5_SIMPLY_EMBEDDED_PLAYER" -> {
                 reqBuilder.header("User-Agent", YouTubeAuth.UA_TV_EMBED)
@@ -246,6 +293,27 @@ object YouTubePlayerUnlock {
                 .put("gl", "US")
                 .put("utcOffsetMinutes", 0)
 
+            "TVHTML5" -> JSONObject()
+                .put("clientName", "TVHTML5")
+                .put("clientVersion", TV_VERSION)
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
+            "TVHTML5_SIMPLY" -> JSONObject()
+                .put("clientName", "TVHTML5_SIMPLY")
+                .put("clientVersion", "1.0")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
+            "WEB_EMBEDDED_PLAYER" -> JSONObject()
+                .put("clientName", "WEB_EMBEDDED_PLAYER")
+                .put("clientVersion", WEB_EMBED_VERSION)
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
             "TVHTML5_SIMPLY_EMBEDDED_PLAYER" -> JSONObject()
                 .put("clientName", "TVHTML5_SIMPLY_EMBEDDED_PLAYER")
                 .put("clientVersion", "2.0")
@@ -287,6 +355,11 @@ object YouTubePlayerUnlock {
             contextObj.put(
                 "thirdParty",
                 JSONObject().put("embedUrl", "https://www.youtube.com/")
+            )
+        } else if (kind == "WEB_EMBEDDED_PLAYER") {
+            contextObj.put(
+                "thirdParty",
+                JSONObject().put("embedUrl", "https://www.youtube.com/embed/$videoId")
             )
         }
 
