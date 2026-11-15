@@ -924,8 +924,10 @@ object PlaybackCenter {
                     val vid = DownloadCenter.videoIdOf(first.url)
                     val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                    }?.let { StreamCatalog.fromPlayerJson(it, first.url) }
+                        ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                            ?.let { YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid) }
                             ?.let { StreamCatalog.fromPlayerJson(it, first.url) }
-                    }
                     if (direct != null && currentEntry?.url == first.url) {
                         catalog = direct
                         LocalStore.addToMusicHistory(appContext, first.toVideoEntry())
@@ -2134,9 +2136,13 @@ object PlaybackCenter {
         }.getOrElse { err ->
             if (err is LiveContentException) throw err
             val vid = DownloadCenter.videoIdOf(entry.url)
-            YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-                ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
-                ?: throw err
+            val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+            }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                    ?.let { YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid) }
+                    ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+            direct ?: throw err
         }
         val audio = pickMusicAudio(c)
             ?: throw IOException("No audio stream found")

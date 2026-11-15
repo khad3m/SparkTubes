@@ -2,9 +2,11 @@ package com.sparktube.app.net
 
 import android.webkit.CookieManager
 import com.sparktube.app.util.AppPrefs
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * Manages Google / YouTube session cookies, `SAPISIDHASH` authorization headers,
@@ -15,6 +17,10 @@ object YouTubeAuth {
     const val UA_WEB_CHROME =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+    const val UA_WEB_CREATOR =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     const val UA_ANDROID_VR =
         "com.google.android.apps.youtube.vr.oculus/1.60.19 " +
@@ -138,6 +144,49 @@ object YouTubeAuth {
         return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
     }
 
+    /** Cached InnerTube visitor data (X-Goog-Visitor-Id). Signed-in WEB/MWEB player
+     *  requests without this header are rejected with LOGIN_REQUIRED even when the
+     *  cookies and SAPISIDHASH are valid — fetched once per 30 minutes from sw.js_data. */
+    @Volatile private var cachedVisitorData: String? = null
+    @Volatile private var cachedVisitorDataAt: Long = 0L
+    private val visitorClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
+
+    fun visitorData(): String? {
+        val now = System.currentTimeMillis()
+        cachedVisitorData?.let { if (now - cachedVisitorDataAt < 30 * 60_000L) return it }
+        val fetched = runCatching {
+            val req = Request.Builder()
+                .url("https://www.youtube.com/sw.js_data")
+                .header("User-Agent", UA_WEB_CHROME)
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Cookie", buildCookieHeader())
+                .build()
+            visitorClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@runCatching null
+                val body = resp.body?.string().orEmpty()
+                Regex("\"visitorData\":\"((?:[^\"\\\\]|\\\\.)+)\"").find(body)
+                    ?.groupValues?.getOrNull(1)
+                    ?.run { org.json.JSONArray("[\"$this\"]").optString(0) }
+                    ?.takeIf { it.isNotBlank() }
+            }
+        }.getOrNull()
+        if (!fetched.isNullOrBlank()) {
+            cachedVisitorData = fetched
+            cachedVisitorDataAt = now
+        }
+        return cachedVisitorData ?: fetched
+    }
+
+    /** X-Goog-PageId mirrors the SESSION_INDEX cookie (usually "0"). */
+    private fun sessionPageIndex(): String {
+        return parseCookieMap(AppPrefs.youtubeCookies)["SESSION_INDEX"]?.takeIf { it.isNotBlank() } ?: "0"
+    }
+
     fun applyYouTubeAuthToRequest(url: String, builder: Request.Builder, existingCookies: List<String> = emptyList()) {
         val lower = url.lowercase(Locale.US)
         if (!lower.contains("youtube.com") && !lower.contains("youtu.be")) return
@@ -158,9 +207,11 @@ object YouTubeAuth {
             buildAuthorizationHeader(origin)?.let { auth ->
                 builder.header("Authorization", auth)
             }
+            visitorData()?.let { builder.header("X-Goog-Visitor-Id", it) }
             builder.header("X-Origin", origin)
             builder.header("Origin", origin)
             builder.header("X-Goog-AuthUser", "0")
+            builder.header("X-Goog-PageId", sessionPageIndex())
             builder.header("X-Goog-Api-Format-Version", "1")
         }
     }

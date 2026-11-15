@@ -34,6 +34,11 @@ object YouTubePlayerUnlock {
     private const val TAG = "PlayerUnlock"
     private const val TV_VERSION = "7.20250312.16.00"
     private const val WEB_EMBED_VERSION = "1.20250310.01.00"
+    private const val WEB_CREATOR_VERSION = "1.20250310.01.00"
+    private val WEB_FAMILY = setOf(
+        "WEB", "WEB_CREATOR", "MWEB", "TVHTML5", "TVHTML5_SIMPLY",
+        "WEB_EMBEDDED_PLAYER", "TVHTML5_SIMPLY_EMBEDDED_PLAYER"
+    )
     private const val PLAYER_ENDPOINT = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
     private const val MWEB_PLAYER_ENDPOINT = "https://m.youtube.com/youtubei/v1/player?prettyPrint=false"
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTypeOrNull()
@@ -68,11 +73,12 @@ object YouTubePlayerUnlock {
         val loggedIn = YouTubeAuth.isLoggedIn()
         val candidates = if (loggedIn) {
             listOf(
+                FallbackSpec("WEB", useCookies = true),
+                FallbackSpec("WEB_CREATOR", useCookies = true),
+                FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
                 FallbackSpec("MWEB", useCookies = true),
                 FallbackSpec("TVHTML5", useCookies = true),
-                FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
                 FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
-                FallbackSpec("WEB", useCookies = true),
                 FallbackSpec("ANDROID", useCookies = true),
                 FallbackSpec("ANDROID_VR", useCookies = false),
                 FallbackSpec("IOS", useCookies = false)
@@ -229,10 +235,11 @@ object YouTubePlayerUnlock {
             // that are merely bot-checked, not age-gated.
             val candidates = if (loggedIn) {
                 listOf(
-                    FallbackSpec("MWEB", useCookies = true),
                     FallbackSpec("WEB", useCookies = true),
-                    FallbackSpec("TVHTML5", useCookies = true),
+                    FallbackSpec("WEB_CREATOR", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
+                    FallbackSpec("MWEB", useCookies = true),
+                    FallbackSpec("TVHTML5", useCookies = true),
                     FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
                     FallbackSpec("ANDROID", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY", useCookies = true),
@@ -383,7 +390,7 @@ object YouTubePlayerUnlock {
             origRequest?.optJSONObject("serviceIntegrityDimensions")?.let {
                 payload.put("serviceIntegrityDimensions", it)
             }
-        } else if (spec.kind in setOf("WEB", "MWEB", "TVHTML5", "TVHTML5_SIMPLY_EMBEDDED_PLAYER", "WEB_EMBEDDED_PLAYER")) {
+        } else if (spec.kind in WEB_FAMILY) {
             signatureTimestampFor(videoId)?.let { sts ->
                 payload.put(
                     "playbackContext",
@@ -414,6 +421,13 @@ object YouTubePlayerUnlock {
                 reqBuilder.header("X-YouTube-Client-Version", TV_VERSION)
                 reqBuilder.header("Origin", "https://www.youtube.com")
                 reqBuilder.header("Referer", "https://www.youtube.com/tv")
+            }
+            "WEB_CREATOR" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_WEB_CREATOR)
+                reqBuilder.header("X-YouTube-Client-Name", "62")
+                reqBuilder.header("X-YouTube-Client-Version", WEB_CREATOR_VERSION)
+                reqBuilder.header("Origin", "https://www.youtube.com")
+                reqBuilder.header("Referer", "https://www.youtube.com/")
             }
             "TVHTML5_SIMPLY" -> {
                 reqBuilder.header("User-Agent", "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version")
@@ -566,12 +580,25 @@ object YouTubePlayerUnlock {
                 .put("gl", com.sparktube.app.util.AppPrefs.countryOrDefault.ifBlank { "US" })
                 .put("utcOffsetMinutes", 0)
 
+            "WEB_CREATOR" -> JSONObject()
+                .put("clientName", "WEB_CREATOR")
+                .put("clientVersion", WEB_CREATOR_VERSION)
+                .put("hl", "en")
+                .put("gl", com.sparktube.app.util.AppPrefs.countryOrDefault.ifBlank { "US" })
+                .put("utcOffsetMinutes", 0)
+
             else -> JSONObject()
                 .put("clientName", "WEB")
                 .put("clientVersion", "2.20250312.01.00")
                 .put("hl", "en")
                 .put("gl", com.sparktube.app.util.AppPrefs.countryOrDefault.ifBlank { "US" })
                 .put("utcOffsetMinutes", 0)
+        }
+
+        // Signed-in WEB-family player requests without visitorData come back
+        // LOGIN_REQUIRED even with valid cookies + SAPISIDHASH (yt-dlp parity).
+        if (kind in WEB_FAMILY) {
+            YouTubeAuth.visitorData()?.takeIf { it.isNotBlank() }?.let { clientObj.put("visitorData", it) }
         }
 
         val contextObj = JSONObject().put("client", clientObj)

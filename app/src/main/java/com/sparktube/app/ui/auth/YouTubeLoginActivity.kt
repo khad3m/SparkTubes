@@ -182,6 +182,9 @@ class YouTubeLoginActivity : AppCompatActivity() {
             savedSuccessfully = true
             runCatching { CookieManager.getInstance().flush() }
             YouTubeAuth.saveCookies(raw, getString(R.string.youtube_account_connected))
+            // Pre-warm the InnerTube visitor data so the first signed-in
+            // (age-gated) playback right after login does not stall.
+            Thread { runCatching { YouTubeAuth.visitorData() } }.start()
             YtRepository.clearCache()
             Toast.makeText(
                 this,
