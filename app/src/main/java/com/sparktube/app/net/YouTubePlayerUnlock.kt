@@ -178,7 +178,7 @@ object YouTubePlayerUnlock {
         }
         clearNewPipeJavaScriptExceptions()
         val sts = runCatching {
-            YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId)?.trim()?.toIntOrNull()
+            YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId)
         }.getOrNull()
         if (sts != null && sts > 18000) {
             cachedSts = sts
