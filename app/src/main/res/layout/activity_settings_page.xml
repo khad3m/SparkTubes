@@ -36,9 +36,14 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <!-- v1.7.4: 0dp + weight=1 so the scroll area ends EXACTLY at the screen
+         bottom (a match_parent ScrollView inside this LinearLayout used to
+         extend past the screen, cutting off the last grid cards). -->
     <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
         android:clipToPadding="false"
         android:paddingBottom="24dp">
 

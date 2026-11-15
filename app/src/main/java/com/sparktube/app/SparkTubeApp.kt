@@ -17,6 +17,9 @@ import org.schabi.newpipe.extractor.localization.Localization
 
 class SparkTubeApp : Application(), ImageLoaderFactory {
 
+    /** Open activities — when it hits 0 the app has left the foreground. */
+    private var startedActivities = 0
+
     override fun onCreate() {
         super.onCreate()
         // Local crash reporting first — installed before anything else so a
@@ -34,6 +37,40 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
         DeviceTuning.init(this)
         PlaybackCenter.init(this)
         Themes.applyDefaultNightMode()
+
+        // v1.7.4: when the app is left entirely (home / recents / screen off),
+        // the shorts preload session ends and its cache is wiped — nothing
+        // keeps streaming in the background.
+        registerActivityLifecycleCallbacks(
+            object : android.app.Application.ActivityLifecycleCallbacks {
+                override fun onActivityStarted(activity: android.app.Activity) {
+                    startedActivities++
+                }
+
+                override fun onActivityStopped(activity: android.app.Activity) {
+                    startedActivities--
+                    if (startedActivities <= 0) {
+                        PlaybackCenter.clearShortsPrefetch()
+                    }
+                }
+
+                override fun onActivityCreated(
+                    activity: android.app.Activity,
+                    savedInstanceState: android.os.Bundle?
+                ) = Unit
+
+                override fun onActivityResumed(activity: android.app.Activity) = Unit
+
+                override fun onActivityPaused(activity: android.app.Activity) = Unit
+
+                override fun onActivitySaveInstanceState(
+                    activity: android.app.Activity,
+                    outState: android.os.Bundle
+                ) = Unit
+
+                override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+            }
+        )
 
         CrashReporter.logBreadcrumb(
             "SparkTube ${BuildConfig.VERSION_NAME} started"

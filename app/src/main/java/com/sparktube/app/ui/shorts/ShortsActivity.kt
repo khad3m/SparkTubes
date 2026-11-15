@@ -65,6 +65,37 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
     private var loadingMore = false
     private var morePage = 0
 
+    /**
+     * v1.7.4: shorts already watched in THIS app session. Every open of the
+     * shorts screen now serves fresh items instead of the same feed, and the
+     * list recycles only when nothing unseen is left. It lives in memory, so
+     * it is gone when the app process exits (same lifecycle as the prefetch
+     * cache).
+     */
+    private object ShortsSeenStore {
+        val seen = LinkedHashSet<String>()
+
+        /** True when [url] was watched and there are still unseen candidates. */
+        fun shouldSkip(url: String, candidatesLeft: Int): Boolean =
+            url in seen && candidatesLeft > UNSEEN_FLOOR
+
+        /** Filter [items] down to unseen ones, recycling when exhausted. */
+        fun <T> fresh(items: List<T>, urlOf: (T) -> String): List<T> {
+            if (seen.isEmpty()) return items
+            val unseen = items.filter { urlOf(it) !in seen }
+            // If almost nothing unseen remains, start the cycle over instead
+            // of showing an empty / tiny feed.
+            return if (unseen.size >= UNSEEN_FLOOR || unseen.size == items.size) {
+                unseen
+            } else {
+                seen.clear()
+                items
+            }
+        }
+
+        private const val UNSEEN_FLOOR = 5
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         Themes.apply(this)
         super.onCreate(savedInstanceState)
@@ -183,6 +214,12 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
             PlaybackCenter.attachView(page.videoSlot)
         }
         updatePageUi(page)
+        // v1.7.4: remember this short (so it never repeats this session) and
+        // resolve the next 5 streams ahead of time for instant swipes.
+        ShortsSeenStore.seen.add(model.url)
+        PlaybackCenter.prefetchShorts(
+            shorts.drop(position + 1).take(5).map { it.url }
+        )
         if (position >= shorts.size - 5) {
             loadMoreShorts()
         }
@@ -212,8 +249,10 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
                 }
                 if (additions.isNotEmpty()) {
                     val start = shorts.size
-                    shorts.addAll(additions)
-                    adapter.notifyItemRangeInserted(start, additions.size)
+                    // v1.7.4: never append shorts that were already watched.
+                    val fresh = ShortsSeenStore.fresh(additions) { it.url }
+                    shorts.addAll(fresh)
+                    adapter.notifyItemRangeInserted(start, fresh.size)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -273,6 +312,9 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
     override fun onDestroy() {
         attachedPage?.let { PlaybackCenter.detachView(it.videoSlot) }
         attachedPage = null
+        // v1.7.4: leaving the shorts screen ends the preload session — the
+        // next-open feed and prefetch cache start from scratch.
+        PlaybackCenter.clearShortsPrefetch()
         super.onDestroy()
     }
 
@@ -366,12 +408,14 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
                 YtRepository.searchVideos("hindi romantic trending reels shorts", null).items
             }.getOrDefault(emptyList())
                 .filter { it.duration in 1L..180L }
-                .forEach { item ->
-                    val model = item.toUiModel()
-                    if (model.url.isNotBlank()) out.putIfAbsent(model.url, model)
-                }
+                    .forEach { item ->
+                        val model = item.toUiModel()
+                        if (model.url.isNotBlank()) out.putIfAbsent(model.url, model)
+                    }
         }
-        return out.values.toList()
+        // v1.7.4: serve unseen shorts first — the same feed no longer repeats
+        // on every open (recycles only when the pool is exhausted).
+        return ShortsSeenStore.fresh(out.values.toList()) { it.url }
     }
 
     /**

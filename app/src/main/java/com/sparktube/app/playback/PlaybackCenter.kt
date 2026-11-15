@@ -231,6 +231,15 @@ object PlaybackCenter {
     private val musicUriCache = ConcurrentHashMap<String, Uri>()
     private var prefetchJob: Job? = null
 
+    // ----- Shorts prefetch (v1.7.4) -----
+    // Resolved stream catalogs for the next shorts, so swiping down never
+    // waits on the network. Lives only for the current app session and is
+    // wiped when the shorts screen closes or the app leaves the foreground.
+    private val SHORTS_PREFETCH_COUNT = 5
+    private val SHORTS_PREFETCH_CACHE_MAX = 10
+    private val shortsPrefetchCache = ConcurrentHashMap<String, StreamCatalog>()
+    private var shortsPrefetchJob: Job? = null
+
     private var controllerFuture: ListenableFuture<MediaController>? = null
 
     // ----- Sleep Timer & Audio Equalizer / Bass Boost -----
@@ -1414,6 +1423,22 @@ object PlaybackCenter {
         setResolving(true)
         resolveJob = scope.launch {
             try {
+                // v1.7.4: a prefetched short skips the network entirely — its
+                // catalog was already resolved while the previous short played.
+                val preResolved = shortsPrefetchCache.remove(entry.url)
+                if (preResolved != null && currentEntry?.url == entry.url) {
+                    catalog = preResolved
+                    LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
+                    RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
+                    primeMusicUri(entry, preResolved)
+                    notify { it.onItemChanged(currentEntry) }
+                    notify { it.onCatalogReady() }
+                    maybeFetchRelatedFallback()
+                    if (radioMode) {
+                        extendRadioFromRelated()
+                    }
+                    return@launch
+                }
                 val info = YtRepository.streamInfo(entry.url)
                 if (LiveFilter.isLive(info)) {
                     throw LiveContentException()
@@ -1953,6 +1978,42 @@ object PlaybackCenter {
                 }
             }
         }
+    }
+
+    /**
+     * v1.7.4: resolve the next shorts' stream catalogs ahead of time (up to
+     * [SHORTS_PREFETCH_COUNT]) on IO, so the swipe to the next short starts
+     * playing instantly instead of waiting for a stream resolve. Live items
+     * and anything whose identity does not match are skipped.
+     */
+    fun prefetchShorts(urls: List<String>) {
+        val targets = urls.take(SHORTS_PREFETCH_COUNT)
+            .filter { it.isNotBlank() && !shortsPrefetchCache.containsKey(it) }
+        if (targets.isEmpty()) return
+        shortsPrefetchJob?.cancel()
+        shortsPrefetchJob = scope.launch(Dispatchers.IO) {
+            targets.forEach { url ->
+                runCatching {
+                    val info = YtRepository.streamInfo(url)
+                    if (LiveFilter.isLive(info)) return@runCatching
+                    val c = StreamCatalog(info, url)
+                    if (c.videoId == DownloadCenter.videoIdOf(url)) {
+                        // Never let the prefetch cache grow unbounded.
+                        if (shortsPrefetchCache.size >= SHORTS_PREFETCH_CACHE_MAX) {
+                            shortsPrefetchCache.clear()
+                        }
+                        shortsPrefetchCache[url] = c
+                    }
+                }
+            }
+        }
+    }
+
+    /** Drop every prefetched short (shorts screen closed / app backgrounded). */
+    fun clearShortsPrefetch() {
+        shortsPrefetchJob?.cancel()
+        shortsPrefetchJob = null
+        shortsPrefetchCache.clear()
     }
 
     val dataSourceFactory: DefaultDataSource.Factory by lazy {

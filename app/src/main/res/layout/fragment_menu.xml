@@ -5,7 +5,8 @@
     android:layout_height="match_parent"
     android:background="@drawable/bg_ambient"
     android:clipToPadding="false"
-    android:paddingBottom="118dp">
+    android:fillViewport="true"
+    android:paddingBottom="176dp">
 
     <LinearLayout
         android:layout_width="match_parent"

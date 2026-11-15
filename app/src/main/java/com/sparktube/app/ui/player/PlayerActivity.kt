@@ -1590,7 +1590,12 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
 
-    private fun showSheet(sheet: BottomSheetDialog, root: LinearLayout, peekDp: Int = 460) {
+    private fun showSheet(
+        sheet: BottomSheetDialog,
+        root: LinearLayout,
+        peekDp: Int = 460,
+        lockExpanded: Boolean = false
+    ) {
         root.setBackgroundResource(R.drawable.bg_glass_reddish_sheet)
         val handle = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply {
@@ -1603,15 +1608,37 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
         root.addView(handle, 0)
+        // v1.7.4: scroll-performance fixes — the sheet used to feel sticky on
+        // low-RAM devices because the glass tiles (semi-transparent Gradient-
+        // Drawables) were re-composited on every scroll frame over the video:
+        //  - a hardware layer renders the (static) sheet content once and then
+        //    scrolls it as a GPU texture;
+        //  - scrollingCache=off stops the per-scroll bitmap churn;
+        //  - the sheet opens fully expanded and never re-collapses, so
+        //    BottomSheetBehavior no longer fights the ScrollView for gestures.
         val scroll = android.widget.ScrollView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isScrollCacheEnabled = false
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             addView(root)
         }
         sheet.setContentView(scroll)
         sheet.behavior.peekHeight = dp(peekDp)
+        // Only the (long, scrollable) settings grid is locked fully expanded —
+        // the queue/comment sheets keep their normal drag behavior.
+        if (lockExpanded) {
+            sheet.behavior.skipCollapsed = true
+            sheet.behavior.isDraggable = false
+        }
         sheet.setOnShowListener {
             sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
                 ?.setBackgroundColor(Color.TRANSPARENT)
+            if (lockExpanded) {
+                sheet.behavior.state =
+                    com.google.android.material.bottomsheet.BottomSheetBehavior.STATE_EXPANDED
+            }
         }
         sheet.show()
     }
@@ -1803,7 +1830,7 @@ class PlayerActivity : AppCompatActivity() {
             i += 2
         }
 
-        showSheet(sheet, root, peekDp = 480)
+        showSheet(sheet, root, peekDp = 480, lockExpanded = true)
     }
 
     private fun qualitySummary(catalog: StreamCatalog): String {

@@ -58,6 +58,7 @@ import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.playback.StreamCatalog
+import com.sparktube.app.playback.toVideoEntry
 import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.ui.player.DownloadSheet
@@ -873,6 +874,10 @@ class NowPlayingActivity : AppCompatActivity() {
                 },
                 ActionSheet.Item("Crossfade, Sleep Timer & Equalizer") {
                     showSleepTimerAndEqSheet()
+                },
+                // v1.7.4: file the current song into (or remove it from) a playlist.
+                ActionSheet.Item("Add to Playlist") {
+                    PlaylistPicker.show(this, entry.toVideoEntry(), entry.title, entry.uploader)
                 },
                 ActionSheet.Item("Start Station") { restartRadio() },
                 ActionSheet.Item("Download (Audio + .lrc Lyrics)") { onDownloadClicked() },

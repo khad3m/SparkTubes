@@ -29,6 +29,7 @@ import com.sparktube.app.databinding.FragmentMusicBinding
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.ui.common.SkeletonPulse
 import com.sparktube.app.ui.common.VideoUiModel
+import com.sparktube.app.ui.common.toEntry
 import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
 import com.sparktube.app.ui.ScrollsToTop
@@ -396,7 +397,11 @@ class MusicFragment : Fragment(), ScrollsToTop {
         val ctx = requireContext()
         val items = mutableListOf(
             ActionSheet.Item("Play Now") { playSong(model, radio = false) },
-            ActionSheet.Item("Start Station") { playSong(model, radio = true) }
+            ActionSheet.Item("Start Station") { playSong(model, radio = true) },
+            // v1.7.4: file the song into (or remove it from) a playlist.
+            ActionSheet.Item("Add to Playlist") {
+                PlaylistPicker.show(ctx, model.toEntry(), model.title, model.uploader)
+            }
         )
         // Favorite only toggles the track that is actually loaded in the player, so it never
         // starts playback by surprise or flips the wrong song.
