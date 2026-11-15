@@ -627,15 +627,18 @@ object YtRepository {
             }?.let { cached ->
                 if (now - cached.atMs < STREAM_INFO_CACHE_TTL_MS) return@withContext cached.info
             }
+            YouTubePlayerUnlock.clearNewPipeJavaScriptExceptions()
             val info = try {
                 val first = StreamInfo.getInfo(service, url)
                 if (first.videoStreams.isEmpty() && first.videoOnlyStreams.isEmpty() && first.audioStreams.isEmpty()) {
+                    YouTubePlayerUnlock.clearNewPipeJavaScriptExceptions()
                     YouTubePlayerUnlock.forceUnlockForUrl(url)
                     StreamInfo.getInfo(service, url)
                 } else {
                     first
                 }
             } catch (firstErr: Exception) {
+                YouTubePlayerUnlock.clearNewPipeJavaScriptExceptions()
                 YouTubePlayerUnlock.forceUnlockForUrl(url)
                 StreamInfo.getInfo(service, url)
             }

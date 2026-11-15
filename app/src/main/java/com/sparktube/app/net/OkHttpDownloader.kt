@@ -14,16 +14,21 @@ import java.util.concurrent.TimeUnit
 /**
  * OkHttp based [Downloader] implementation used by NewPipeExtractor,
  * upgraded with:
- * - Automatic Google / YouTube session cookie + `SAPISIDHASH` header injection ([YouTubeAuth])
- * - Outgoing `/youtubei/v1/player` `contentCheckOk` & `racyCheckOk` injection ([YouTubePlayerUnlock])
- * - Automatic Multi-Client InnerTube Fallback (`ANDROID_VR`, `TVHTML5_SIMPLY_EMBEDDED_PLAYER`, `IOS`)
- *   whenever a video returns `LOGIN_REQUIRED`, `AGE_VERIFICATION_REQUIRED`, or lacks direct stream URLs.
+ * - Automatic Google / YouTube session cookie + `SAPISIDHASH` + `X-Goog-Visitor-Id` injection ([YouTubeAuth])
+ * - Passive `visitorData` and `datasyncId` harvesting from `/youtubei/v1/` responses
+ * - Automatic `player_es6.vflset` -> `player_ias.vflset` normalization so NewPipeExtractor's
+ *   JavaScript regexes and Mozilla Rhino engine always match the ES5 main player bundle
+ * - Outgoing `/youtubei/v1/player`, `/youtubei/v1/reel/reel_item_watch`, and `/youtubei/v1/next`
+ *   `contentCheckOk` & `racyCheckOk` injection ([YouTubePlayerUnlock])
+ * - Automatic Multi-Client InnerTube Fallback (`TV_SAMSUNG`, `WEB_EMBEDDED_PLAYER`,
+ *   `TVHTML5_SIMPLY_EMBEDDED_PLAYER`, `WEB_CREATOR`, `MWEB`, `ANDROID_VR`, `VISIONOS`)
+ *   on both `/youtubei/v1/player` and `/youtubei/v1/reel/reel_item_watch`.
  */
 object OkHttpDownloader : Downloader() {
 
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -32,7 +37,12 @@ object OkHttpDownloader : Downloader() {
 
     @Throws(IOException::class, ReCaptchaException::class)
     override fun execute(request: Request): Response {
-        val url = request.url()
+        var url = request.url()
+        // If NewPipe requests an ES6 player bundle directly, rewrite to the ES5 ias bundle
+        if (url.contains("/player_es6.vflset/")) {
+            url = url.replace("/player_es6.vflset/", "/player_ias.vflset/")
+        }
+
         val builder = okhttp3.Request.Builder()
             .url(url)
             .addHeader("User-Agent", USER_AGENT)
@@ -46,7 +56,7 @@ object OkHttpDownloader : Downloader() {
             }
         }
 
-        // Inject YouTube session cookies & SAPISIDHASH authorization if signed in
+        // Inject YouTube session cookies, SAPISIDHASH, and X-Goog-Visitor-Id if signed in
         YouTubeAuth.applyYouTubeAuthToRequest(url, builder, existingCookies)
 
         val rawBody = request.dataToSend()
@@ -70,7 +80,19 @@ object OkHttpDownloader : Downloader() {
                 throw ReCaptchaException("reCaptcha Challenge requested", url)
             }
             val finalUrl = response.request.url.toString()
-            val rawText = response.body?.string() ?: ""
+            var rawText = response.body?.string() ?: ""
+
+            // Normalize player_es6.vflset -> player_ias.vflset in embed/iframe_api/watch HTML
+            // so NewPipeExtractor v0.26.5's regex ("/s/player/.../player_ias.vflset/.../base.js")
+            // and Rhino ES5 parser always succeed (yt-dlp parity: forcing "main" player JS variant).
+            if (rawText.contains("player_es6.vflset")) {
+                rawText = rawText.replace("player_es6.vflset", "player_ias.vflset")
+            }
+
+            if (finalUrl.contains("/youtubei/v1/")) {
+                YouTubeAuth.sniffInnerTubeResponse(rawText)
+            }
+
             val unlockedText = YouTubePlayerUnlock.ensurePlayable(finalUrl, body, rawText, client)
             val finalText = CommentAvatarFix.apply(finalUrl, unlockedText)
             val responseCode = if (unlockedText !== rawText && response.code != 200) 200 else response.code

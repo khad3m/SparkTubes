@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -22,16 +23,17 @@ import com.sparktube.app.R
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.ActivityYoutubeLoginBinding
 import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.util.Themes
 import java.util.Locale
 
 /**
- * Crash-safe In-App Google / YouTube Sign-In Activity:
+ * Crash-safe In-App Google / YouTube Sign-In Activity (v1.7.8):
  * - Uses a standard Chrome Mobile User-Agent (without `; wv`) so Google OAuth / ServiceLogin
  *   allows normal sign-in without `disallowed_useragent` errors.
- * - Captures `SAPISID`, `__Secure-3PAPISID`, `SID`, and session cookies via [CookieManager]
- *   and stores them in [YouTubeAuth] so `NewPipeExtractor`, `OkHttpDownloader`, `ExoPlayer`,
- *   and `DownloadCenter` can play & download age-restricted and login-required videos.
+ * - Captures `SAPISID`, `__Secure-3PAPISID`, `SID`, `__Secure-1PSID`, `__Secure-3PSID`, `LOGIN_INFO`
+ *   across all YouTube & Google domains via [CookieManager] AND extracts live `VISITOR_DATA`,
+ *   `DATASYNC_ID`, `SESSION_INDEX`, and `STS` from `window.ytcfg` on login completion.
  */
 class YouTubeLoginActivity : AppCompatActivity() {
 
@@ -103,9 +105,20 @@ class YouTubeLoginActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             useWideViewPort = true
             loadWithOverviewMode = true
-            // Standard Chrome Android User-Agent (without "; wv") so Google Login allows sign-in
             userAgentString = YouTubeAuth.UA_WEB_CHROME
         }
+
+        createdWebView.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun onYtCfg(visitorData: String?, datasyncId: String?, sessionIndex: String?, sts: Int) {
+                YouTubeAuth.updateSessionMetadata(
+                    visitorData = visitorData?.takeIf { it.isNotBlank() },
+                    datasyncId = datasyncId?.takeIf { it.isNotBlank() },
+                    sessionIndex = sessionIndex?.takeIf { it.isNotBlank() },
+                    sts = sts.takeIf { it > 18000 }
+                )
+            }
+        }, "SparkLoginBridge")
 
         createdWebView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -124,7 +137,6 @@ class YouTubeLoginActivity : AppCompatActivity() {
                 if (url.startsWith("http://") || url.startsWith("https://")) {
                     return false
                 }
-                // Block external intent:// schemes from crashing or leaving the login flow
                 return true
             }
 
@@ -137,13 +149,14 @@ class YouTubeLoginActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 if (isFinishing || isDestroyed || savedSuccessfully) return
+                extractYtCfgFromWebView(view)
                 val u = url.orEmpty().lowercase(Locale.US)
-                // Auto-detect completed login once redirected back to youtube.com
                 if (u.contains("youtube.com") && !u.contains("accounts.google.com") &&
                     !u.contains("consent.youtube.com")
                 ) {
                     view?.postDelayed({
                         if (!isFinishing && !isDestroyed && !savedSuccessfully) {
+                            extractYtCfgFromWebView(view)
                             captureCookiesIfPresent(finishActivity = true, silentIfMissing = true)
                         }
                     }, 900L)
@@ -154,19 +167,30 @@ class YouTubeLoginActivity : AppCompatActivity() {
         createdWebView.loadUrl(GOOGLE_YOUTUBE_LOGIN_URL)
     }
 
+    private fun extractYtCfgFromWebView(view: WebView?) {
+        view ?: return
+        val js = """
+            (function() {
+                try {
+                    if (window.ytcfg && typeof window.ytcfg.get === 'function' && window.SparkLoginBridge) {
+                        var vd = window.ytcfg.get('VISITOR_DATA') || '';
+                        var ds = window.ytcfg.get('DATASYNC_ID') || '';
+                        var si = String(window.ytcfg.get('SESSION_INDEX') !== undefined ? window.ytcfg.get('SESSION_INDEX') : '0');
+                        var sts = Number(window.ytcfg.get('STS') || 0);
+                        window.SparkLoginBridge.onYtCfg(vd, ds, si, sts);
+                    }
+                } catch (e) {}
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(js, null)
+    }
+
     private fun collectAllYouTubeCookies(): String {
         return runCatching {
             val cm = CookieManager.getInstance()
             runCatching { cm.flush() }
-            val urls = listOf(
-                "https://www.youtube.com",
-                "https://m.youtube.com",
-                "https://music.youtube.com",
-                "https://accounts.youtube.com",
-                "https://youtube.com"
-            )
             val combined = LinkedHashMap<String, String>()
-            urls.forEach { domain ->
+            YouTubeAuth.COOKIE_DOMAINS.forEach { domain ->
                 val raw = cm.getCookie(domain).orEmpty()
                 if (raw.isNotBlank()) {
                     combined.putAll(YouTubeAuth.parseCookieMap(raw))
@@ -180,11 +204,11 @@ class YouTubeLoginActivity : AppCompatActivity() {
         val raw = collectAllYouTubeCookies()
         if (YouTubeAuth.hasAuthCookiesInString(raw)) {
             savedSuccessfully = true
+            extractYtCfgFromWebView(webView)
             runCatching { CookieManager.getInstance().flush() }
             YouTubeAuth.saveCookies(raw, getString(R.string.youtube_account_connected))
-            // Pre-warm the InnerTube visitor data so the first signed-in
-            // (age-gated) playback right after login does not stall.
-            Thread { runCatching { YouTubeAuth.visitorData() } }.start()
+            YouTubePlayerUnlock.clearCache()
+            Thread { runCatching { YouTubeAuth.visitorData(allowNetworkFetch = true) } }.start()
             YtRepository.clearCache()
             Toast.makeText(
                 this,

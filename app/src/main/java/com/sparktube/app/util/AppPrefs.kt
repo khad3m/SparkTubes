@@ -29,9 +29,13 @@ object AppPrefs {
     private const val KEY_CUSTOM_DOWNLOAD_PATH = "custom_download_path"
     private const val KEY_CUSTOM_DOWNLOAD_TREE_URI = "custom_download_tree_uri"
 
-    // Google / YouTube session authentication cookies & account label
+    // Google / YouTube session authentication cookies & account metadata
     private const val KEY_YOUTUBE_COOKIES = "youtube_cookies"
     private const val KEY_YOUTUBE_ACCOUNT_LABEL = "youtube_account_label"
+    private const val KEY_YOUTUBE_VISITOR_DATA = "youtube_visitor_data"
+    private const val KEY_YOUTUBE_DATASYNC_ID = "youtube_datasync_id"
+    private const val KEY_YOUTUBE_SESSION_INDEX = "youtube_session_index"
+    private const val KEY_YOUTUBE_STS = "youtube_sts"
 
     // Default video quality: separate values for Wi-Fi and mobile data.
     private const val KEY_DEFAULT_VIDEO_HEIGHT_WIFI = "default_video_height_wifi"
@@ -204,6 +208,34 @@ object AppPrefs {
         get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_ACCOUNT_LABEL, "") ?: "" else ""
         set(value) {
             if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_ACCOUNT_LABEL, value).apply()
+        }
+
+    /** Persisted InnerTube visitorData token (`X-Goog-Visitor-Id`). */
+    var youtubeVisitorData: String
+        get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_VISITOR_DATA, "") ?: "" else ""
+        set(value) {
+            if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_VISITOR_DATA, value).apply()
+        }
+
+    /** Persisted InnerTube `DATASYNC_ID` (`delegated_session_id||user_session_id` or `user_session_id||`). */
+    var youtubeDatasyncId: String
+        get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_DATASYNC_ID, "") ?: "" else ""
+        set(value) {
+            if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_DATASYNC_ID, value).apply()
+        }
+
+    /** Persisted InnerTube `SESSION_INDEX` (`X-Goog-AuthUser`). */
+    var youtubeSessionIndex: String
+        get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_SESSION_INDEX, "") ?: "" else ""
+        set(value) {
+            if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_SESSION_INDEX, value).apply()
+        }
+
+    /** Persisted YouTube player signatureTimestamp (`sts`). */
+    var youtubeSts: Int
+        get() = if (this::sp.isInitialized) sp.getInt(KEY_YOUTUBE_STS, 0) else 0
+        set(value) {
+            if (this::sp.isInitialized) sp.edit().putInt(KEY_YOUTUBE_STS, value).apply()
         }
 
     /** Human-readable summary of the active download directory. */

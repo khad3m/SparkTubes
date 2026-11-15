@@ -143,8 +143,27 @@ class StreamCatalog private constructor(
         .distinctBy { it.effectiveHeight() }
         .sortedByDescending { it.effectiveHeight() }
 
-    val audioTracks: List<AudioTrackGroup> = rawAudio
-        .filter { it.isUrl }
+    private val effectiveRawAudio: List<AudioStream> = run {
+        val validAudio = rawAudio.filter { it.isUrl }
+        if (validAudio.isNotEmpty()) {
+            validAudio
+        } else {
+            val muxedStream = rawMuxed.firstOrNull { it.isUrl }
+            val synth = muxedStream?.let { vs ->
+                runCatching {
+                    AudioStream.Builder()
+                        .setId(vs.id.ifBlank { "18" })
+                        .setContent(vs.content, true)
+                        .setMediaFormat(org.schabi.newpipe.extractor.MediaFormat.M4A)
+                        .setAverageBitrate(128)
+                        .build()
+                }.getOrNull()
+            }
+            listOfNotNull(synth)
+        }
+    }
+
+    val audioTracks: List<AudioTrackGroup> = effectiveRawAudio
         .groupBy { it.audioTrackId ?: it.audioTrackName ?: "default" }
         .map { (id, streams) ->
             val first = streams.first()
@@ -247,6 +266,19 @@ class StreamCatalog private constructor(
 
             if (videoOnlyList.isEmpty() && muxedList.isEmpty() && audioList.isEmpty()) return null
 
+            var maxApproxDurationMs = 0L
+            for (arrName in listOf("formats", "adaptiveFormats")) {
+                val arr = sd.optJSONArray(arrName) ?: continue
+                for (i in 0 until arr.length()) {
+                    val ms = arr.optJSONObject(i)?.optString("approxDurationMs")?.toLongOrNull() ?: 0L
+                    if (ms > maxApproxDurationMs) maxApproxDurationMs = ms
+                }
+            }
+            val resolvedDurationSec = vd?.optString("lengthSeconds")?.toLongOrNull()?.takeIf { it > 0L }
+                ?: root.optJSONObject("microformat")?.optJSONObject("playerMicroformatRenderer")
+                    ?.optString("lengthSeconds")?.toLongOrNull()?.takeIf { it > 0L }
+                ?: (maxApproxDurationMs / 1000L).coerceAtLeast(0L)
+
             return StreamCatalog(
                 url = canonicalUrl,
                 videoId = vid,
@@ -256,7 +288,7 @@ class StreamCatalog private constructor(
                 uploaderName = vd?.optString("author").orEmpty(),
                 uploaderAvatarUrl = "",
                 viewCount = vd?.optString("viewCount")?.toLongOrNull() ?: -1L,
-                durationSec = vd?.optString("lengthSeconds")?.toLongOrNull() ?: 0L,
+                durationSec = resolvedDurationSec,
                 description = vd?.optString("shortDescription").orEmpty(),
                 descriptionIsHtml = false,
                 uploadDateText = "",
@@ -600,9 +632,17 @@ object PlaybackCenter {
         private set
     private var usedFallback = false
 
-    /** One signed-in unlock retry per play attempt (v1.7.2 age-gate wiring). */
+    /** Bounded unlock/HTTP retry flags per track play attempt (v1.7.8 loop fix). */
     private var usedSignedInRetry = false
     private var usedHttpRetry = false
+
+    private fun resetRetryFlags() {
+        usedSignedInRetry = false
+        usedHttpRetry = false
+        usedFallback = false
+        dashBlocked = false
+        downshiftHeight = null
+    }
 
     var catalog: StreamCatalog? = null
         private set
@@ -848,6 +888,7 @@ object PlaybackCenter {
         playlistMode = false
         audioOnlyMode = false
         setQueue(listOf(entry) + extraQueue, 0)
+        resetRetryFlags()
         resolveCurrent()
     }
 
@@ -861,6 +902,7 @@ object PlaybackCenter {
         playlistMode = true
         audioOnlyMode = false
         setQueue(entries, startIndex.coerceIn(0, entries.size - 1))
+        resetRetryFlags()
         resolveCurrent()
     }
 
@@ -1014,6 +1056,7 @@ object PlaybackCenter {
             }
             Mode.VIDEO -> {
                 queueIndex = index
+                resetRetryFlags()
                 resolveCurrent()
             }
             Mode.NONE -> Unit
@@ -1035,7 +1078,11 @@ object PlaybackCenter {
     }
 
     val positionMs: Long get() = playerRef?.currentPosition?.coerceAtLeast(0L) ?: 0L
-    val durationMs: Long get() = playerRef?.duration?.takeIf { it > 0 } ?: 0L
+    val durationMs: Long
+        get() = playerRef?.duration?.takeIf { it > 0 }
+            ?: ((catalogForCurrentEntry()?.durationSec?.takeIf { it > 0 }
+                ?: currentEntry?.durationSec?.takeIf { it > 0 }
+                ?: 0L) * 1000L)
     val isPlaying: Boolean get() = playerRef?.isPlaying ?: false
     val isBuffering: Boolean get() = playerRef?.playbackState == Player.STATE_BUFFERING
 
@@ -1088,6 +1135,7 @@ object PlaybackCenter {
             }
             Mode.VIDEO -> if (queueIndex < queue.size - 1) {
                 queueIndex++
+                resetRetryFlags()
                 resolveCurrent()
             }
             Mode.NONE -> Unit
@@ -1103,6 +1151,7 @@ object PlaybackCenter {
             }
             Mode.VIDEO -> if (queueIndex > 0) {
                 queueIndex--
+                resetRetryFlags()
                 resolveCurrent()
             } else {
                 seekTo(0)
@@ -1440,8 +1489,6 @@ object PlaybackCenter {
         val entry = currentEntry ?: return
         resolveJob?.cancel()
         watchdogJob?.cancel()
-        downshiftHeight = null
-        dashBlocked = false
         dashActive = false
         catalog = null
         notify { it.onItemChanged(currentEntry) }
@@ -1485,8 +1532,6 @@ object PlaybackCenter {
             return
         }
 
-        usedSignedInRetry = false
-        usedHttpRetry = false
         setResolving(true)
         resolveJob = scope.launch {
             try {
@@ -1533,27 +1578,17 @@ object PlaybackCenter {
                 // login-gated and the user IS signed in with Google, force the
                 // signed-in unlock engine (WEB/ANDROID + session cookies +
                 // SAPISIDHASH) and retry the resolve exactly once.
-                val msg = (e.message ?: "").lowercase()
-                val ageGated = e is org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException ||
-                    e is org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException ||
-                    msg.contains("age") || msg.contains("anonymously") || msg.contains("sign in") ||
-                    msg.contains("logged") || msg.contains("log in") ||
-                    msg.contains("confirm your age") || msg.contains("login")
-                if (ageGated && !entry.url.startsWith("file://") && !usedSignedInRetry) {
+                if (e !is LiveContentException && !entry.url.startsWith("file://") && !usedSignedInRetry) {
                     usedSignedInRetry = true
                     val vid = DownloadCenter.videoIdOf(entry.url)
-                    val directJson = (if (!usedHttpRetry) {
-                        kotlinx.coroutines.withContext(Dispatchers.IO) {
-                            YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-                        }
-                    } else null) ?: if (YouTubeAuth.isLoggedIn()) {
-                        com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
-                            ?.let {
-                                kotlinx.coroutines.withContext(Dispatchers.IO) {
-                                    YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid)
-                                }
+                    val directJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                    } ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                        ?.let {
+                            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid)
                             }
-                    } else null
+                        }
                     val directCatalog = directJson?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
                     if (directCatalog != null && currentEntry?.url == entry.url) {
                         catalog = directCatalog
@@ -1642,6 +1677,32 @@ object PlaybackCenter {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (e !is LiveContentException && !entry.url.startsWith("file://")) {
+                    val vid = DownloadCenter.videoIdOf(entry.url)
+                    val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                    }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                        ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                            ?.let {
+                                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                    YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid)
+                                }
+                            }
+                            ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                    if (direct != null && currentEntry?.url == entry.url) {
+                        catalog = direct
+                        LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
+                        RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
+                        primeMusicUri(entry, direct)
+                        notify { it.onItemChanged(currentEntry) }
+                        notify { it.onCatalogReady() }
+                        maybeFetchRelatedFallback()
+                        if (radioMode) {
+                            extendRadioFromRelated()
+                        }
+                        return@launch
+                    }
+                }
                 if (e is LiveContentException) {
                     notify { it.onLiveContentBlocked() }
                 } else {
@@ -1776,18 +1837,6 @@ object PlaybackCenter {
             }
             return
         }
-        if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
-            !usedHttpRetry && currentEntry?.url?.startsWith("file://") == false
-        ) {
-            usedHttpRetry = true
-            val entry = currentEntry
-            if (entry != null) {
-                YtRepository.invalidateStreamCache(entry.url)
-                YouTubePlayerUnlock.forceUnlockForUrl(entry.url)
-                resolveCurrent()
-                return
-            }
-        }
         if (dashActive) {
             dashBlocked = true
             android.util.Log.w("SparkTubeStartup", "adaptive source failed: ${error.errorCodeName}")
@@ -1811,6 +1860,16 @@ object PlaybackCenter {
             rebuildSource(keepPosition = true)
             notify { it.onCatalogReady() }
             return
+        }
+        if (!usedHttpRetry && currentEntry?.url?.startsWith("file://") == false) {
+            usedHttpRetry = true
+            val entry = currentEntry
+            if (entry != null) {
+                YtRepository.invalidateStreamCache(entry.url)
+                YouTubePlayerUnlock.forceUnlockForUrl(entry.url)
+                resolveCurrent()
+                return
+            }
         }
         if (skipBrokenPlaylistItem()) return
         notifyFailure()
@@ -2253,6 +2312,7 @@ object PlaybackCenter {
             Mode.AUDIO -> playMusicQueue(queue.toList(), queueIndex.coerceAtLeast(0), allowRadio = radioMode)
             Mode.VIDEO, Mode.NONE -> {
                 mode = Mode.VIDEO
+                resetRetryFlags()
                 resolveCurrent()
             }
         }

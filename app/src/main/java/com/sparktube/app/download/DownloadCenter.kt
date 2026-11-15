@@ -315,8 +315,14 @@ object DownloadCenter {
         runCatching {
             val watchUrl = record.sourceUrl.takeIf { it.startsWith("http") }
                 ?: "https://www.youtube.com/watch?v=${record.videoId}"
-            val info = YtRepository.streamInfo(watchUrl)
-            val catalog = StreamCatalog(info, watchUrl)
+            val catalog = runCatching {
+                val info = YtRepository.streamInfo(watchUrl)
+                StreamCatalog(info, watchUrl)
+            }.getOrElse {
+                com.sparktube.app.net.YouTubePlayerUnlock.fetchUnlockedPlayerJson(record.videoId)
+                    ?.let { StreamCatalog.fromPlayerJson(it, watchUrl) }
+                    ?: throw it
+            }
             val audioGroup = catalog.audioTracks.firstOrNull()
             when (record.type) {
                 TYPE_AUDIO -> {
