@@ -130,17 +130,129 @@ class SettingsPageActivity : AppCompatActivity() {
         }
     }
 
+    // ----- 2-Column Icon Grid Helpers (v1.7.3) -----
+
+    private data class GridItem(
+        val iconRes: Int,
+        val title: String,
+        val value: String,
+        val onClick: () -> Unit
+    )
+
+    private fun menuGrid(items: List<GridItem>): LinearLayout {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(10) }
+        }
+        var i = 0
+        while (i < items.size) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                isBaselineAligned = false
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).also { if (i > 0) it.topMargin = dp(10) }
+            }
+            val left = gridCard(items[i]).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .also { it.marginEnd = dp(5) }
+            }
+            row.addView(left)
+            if (i + 1 < items.size) {
+                val right = gridCard(items[i + 1]).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        .also { it.marginStart = dp(5) }
+                }
+                row.addView(right)
+            } else {
+                row.addView(
+                    android.widget.Space(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, 1, 1f).also { it.marginStart = dp(5) }
+                    }
+                )
+            }
+            container.addView(row)
+            i += 2
+        }
+        return container
+    }
+
+    private fun gridCard(item: GridItem): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumHeight = dp(112)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setBackgroundResource(R.drawable.bg_card_soft)
+            isClickable = true
+            isFocusable = true
+            Motion.pressable(this, 0.96f)
+            setOnClickListener { item.onClick() }
+
+            val topRow = LinearLayout(this@SettingsPageActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val badge = FrameLayout(this@SettingsPageActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(38), dp(38))
+                setBackgroundResource(R.drawable.bg_glass_circle)
+                addView(
+                    android.widget.ImageView(this@SettingsPageActivity).apply {
+                        setImageResource(item.iconRes)
+                        setColorFilter(Themes.accentColor(this@SettingsPageActivity))
+                        importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                        layoutParams = FrameLayout.LayoutParams(dp(19), dp(19), Gravity.CENTER)
+                    }
+                )
+            }
+            topRow.addView(badge)
+            topRow.addView(android.widget.Space(this@SettingsPageActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+            })
+            if (item.value.isNotBlank()) {
+                val isOn = item.value.equals(getString(R.string.on), ignoreCase = true)
+                topRow.addView(
+                    TextView(this@SettingsPageActivity).apply {
+                        text = item.value
+                        textSize = 10.5f
+                        maxLines = 1
+                        maxWidth = dp(86)
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(
+                            if (isOn) Themes.accentColor(this@SettingsPageActivity)
+                            else getColor(R.color.on_surface_variant)
+                        )
+                        setBackgroundResource(R.drawable.bg_glass_pill)
+                        setPadding(dp(8), dp(3), dp(8), dp(3))
+                    }
+                )
+            }
+            addView(topRow)
+
+            addView(
+                TextView(this@SettingsPageActivity).apply {
+                    text = item.title
+                    textSize = 14.5f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setTextColor(getColor(R.color.on_surface))
+                    setTypeface(null, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).also { it.topMargin = dp(14) }
+                }
+            )
+        }
+
     // ----- General -----
 
     private fun renderGeneral(content: LinearLayout) {
-        content.addView(
-            menuRow(
-                getString(R.string.youtube_account_title),
-                YouTubeAuth.accountSummary()
-            ) {
-                showYouTubeAccountDialog()
-            }
-        )
+
         // Premium chip grid: Theme (v1.7.1)
         content.addView(sectionLabel(getString(R.string.settings_theme)))
         content.addView(
@@ -180,60 +292,53 @@ class SettingsPageActivity : AppCompatActivity() {
             )
         )
         content.addView(
-            menuRow(
-                getString(R.string.settings_animations),
-                if (AppPrefs.animations) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.animations = !AppPrefs.animations
-                render()
-            }
-        )
-        // Shorts / Reels: search tab + navbar shortcut (v1.7.0)
-        content.addView(
-            menuRow(
-                getString(R.string.settings_shorts),
-                if (AppPrefs.shortsEnabled) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.shortsEnabled = !AppPrefs.shortsEnabled
-                render()
-            }
-        )
-        content.addView(
-            menuRow(
-                getString(R.string.settings_download_folder),
-                AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
-            ) {
-                showDownloadFolderPicker()
-            }
-        )
-        // Settings-controlled In-App Update toggle
-        content.addView(
-            menuRow(
-                "Auto check for updates",
-                if (AppPrefs.autoCheckUpdates) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.autoCheckUpdates = !AppPrefs.autoCheckUpdates
-                render()
-            }
-        )
-        // Manual In-App Update trigger right inside Settings
-        content.addView(
-            menuRow(
-                getString(R.string.menu_check_update),
-                "v${BuildConfig.VERSION_NAME}"
-            ) {
-                checkForUpdatesNow()
-            }
-        )
-        content.addView(
-            menuRow(getString(R.string.settings_crash_logs), crashLogCountLabel()) {
-                showCrashLogsSheet()
-            }
-        )
-        content.addView(
-            menuRow(getString(R.string.menu_clear_data), "") {
-                showClearDataSheet()
-            }
+            menuGrid(
+                listOf(
+                    GridItem(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
+                        showYouTubeAccountDialog()
+                    },
+                    GridItem(
+                        R.drawable.ic_palette,
+                        getString(R.string.settings_animations),
+                        if (AppPrefs.animations) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.animations = !AppPrefs.animations
+                        render()
+                    },
+                    GridItem(
+                        R.drawable.ic_shorts,
+                        getString(R.string.settings_shorts),
+                        if (AppPrefs.shortsEnabled) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.shortsEnabled = !AppPrefs.shortsEnabled
+                        render()
+                    },
+                    GridItem(
+                        R.drawable.ic_download,
+                        getString(R.string.settings_download_folder),
+                        AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
+                    ) {
+                        showDownloadFolderPicker()
+                    },
+                    GridItem(
+                        R.drawable.ic_update,
+                        "Auto Updates",
+                        if (AppPrefs.autoCheckUpdates) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.autoCheckUpdates = !AppPrefs.autoCheckUpdates
+                        render()
+                    },
+                    GridItem(R.drawable.ic_update, getString(R.string.menu_check_update), "v${BuildConfig.VERSION_NAME}") {
+                        checkForUpdatesNow()
+                    },
+                    GridItem(R.drawable.ic_crash_test, getString(R.string.settings_crash_logs), "${crashLogCountLabel()} logs") {
+                        showCrashLogsSheet()
+                    },
+                    GridItem(R.drawable.ic_delete, getString(R.string.menu_clear_data), "Cache · History") {
+                        showClearDataSheet()
+                    }
+                )
+            )
         )
     }
 
@@ -342,29 +447,20 @@ class SettingsPageActivity : AppCompatActivity() {
     }
 
     private fun checkForUpdatesNow() {
-        Toast.makeText(this, R.string.checking_update, Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "আপডেট চেক করা হচ্ছে...", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val latest = UpdateChecker.fetchLatest()
             if (isFinishing || isDestroyed) return@launch
             if (latest == null) {
-                Toast.makeText(this@SettingsPageActivity, R.string.update_check_failed, Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@SettingsPageActivity, "আপডেট চেক করা যায়নি। ইন্টারনেট সংযোগ দেখুন।", Toast.LENGTH_SHORT).show()
                 return@launch
             }
             if (UpdateChecker.isNewer(BuildConfig.VERSION_NAME, latest.tag)) {
-                AlertDialog.Builder(this@SettingsPageActivity)
-                    .setTitle("${getString(R.string.update_available_title)} (${latest.tag})")
-                    .setMessage(latest.body.ifBlank { latest.name })
-                    .setPositiveButton(R.string.update_download) { _, _ ->
-                        // In-app download with a live progress bar, then the
-                        // system installer — no browser involved.
-                        com.sparktube.app.ui.common.UpdateDownloadUi.start(
-                            this@SettingsPageActivity, latest, lifecycleScope
-                        )
-                    }
-                    .setNegativeButton(R.string.later, null)
-                    .show()
+                com.sparktube.app.ui.common.UpdateDownloadUi.showAvailableSheet(
+                    this@SettingsPageActivity, latest, lifecycleScope
+                )
             } else {
-                Toast.makeText(this@SettingsPageActivity, R.string.up_to_date, Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@SettingsPageActivity, "আপনি সর্বশেষ ভার্সন (v${BuildConfig.VERSION_NAME}) ব্যবহার করছেন ✓", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -648,14 +744,6 @@ class SettingsPageActivity : AppCompatActivity() {
     // ----- Video -----
 
     private fun renderVideo(content: LinearLayout) {
-        content.addView(
-            menuRow(
-                getString(R.string.youtube_account_title),
-                YouTubeAuth.accountSummary()
-            ) {
-                showYouTubeAccountDialog()
-            }
-        )
         // Premium chip grid: default quality per network (v1.7.1)
         val qualityChoices = listOf(0, 2160, 1440, 1080, 720, 480, 360)
         fun qualityChips(currentHeight: Int, apply: (Int) -> Unit) =
@@ -675,14 +763,7 @@ class SettingsPageActivity : AppCompatActivity() {
         content.addView(qualityChips(AppPrefs.defaultVideoHeightWifi) { AppPrefs.defaultVideoHeightWifi = it })
         content.addView(sectionLabel(getString(R.string.settings_default_quality_data)))
         content.addView(qualityChips(AppPrefs.defaultVideoHeightData) { AppPrefs.defaultVideoHeightData = it })
-        content.addView(
-            menuRow(
-                getString(R.string.settings_download_folder),
-                AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
-            ) {
-                showDownloadFolderPicker()
-            }
-        )
+
         // Premium chip grid: subtitles (v1.7.1)
         content.addView(sectionLabel(getString(R.string.subtitles_section)))
         content.addView(
@@ -701,54 +782,58 @@ class SettingsPageActivity : AppCompatActivity() {
             )
         )
         content.addView(
-            menuRow(
-                getString(R.string.settings_smart_streaming),
-                if (AppPrefs.smartStreaming) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.smartStreaming = !AppPrefs.smartStreaming
-                render()
-            }
-        )
-        content.addView(
-            menuRow(
-                getString(R.string.settings_hw_acceleration),
-                if (AppPrefs.hardwareAcceleration) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.hardwareAcceleration = !AppPrefs.hardwareAcceleration
-                render()
-            }
-        )
-        content.addView(
-            menuRow(
-                getString(R.string.settings_autoplay_next_video),
-                if (AppPrefs.videoAutoplayNext) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.videoAutoplayNext = !AppPrefs.videoAutoplayNext
-                render()
-            }
-        )
-        content.addView(
-            menuRow(
-                "SponsorBlock (Auto-skip sponsors & intros)",
-                if (AppPrefs.sponsorBlock) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.sponsorBlock = !AppPrefs.sponsorBlock
-                render()
-            }
+            menuGrid(
+                listOf(
+                    GridItem(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
+                        showYouTubeAccountDialog()
+                    },
+                    GridItem(
+                        R.drawable.ic_download,
+                        getString(R.string.settings_download_folder),
+                        AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
+                    ) {
+                        showDownloadFolderPicker()
+                    },
+                    GridItem(
+                        R.drawable.ic_tune,
+                        getString(R.string.settings_smart_streaming),
+                        if (AppPrefs.smartStreaming) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.smartStreaming = !AppPrefs.smartStreaming
+                        render()
+                    },
+                    GridItem(
+                        R.drawable.ic_video_cam,
+                        getString(R.string.settings_hw_acceleration),
+                        if (AppPrefs.hardwareAcceleration) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.hardwareAcceleration = !AppPrefs.hardwareAcceleration
+                        render()
+                    },
+                    GridItem(
+                        R.drawable.ic_play_arrow,
+                        getString(R.string.settings_autoplay_next_video),
+                        if (AppPrefs.videoAutoplayNext) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.videoAutoplayNext = !AppPrefs.videoAutoplayNext
+                        render()
+                    },
+                    GridItem(
+                        R.drawable.ic_player_replay,
+                        "SponsorBlock",
+                        if (AppPrefs.sponsorBlock) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.sponsorBlock = !AppPrefs.sponsorBlock
+                        render()
+                    }
+                )
+            )
         )
     }
 
     // ----- Music -----
 
     private fun renderMusic(content: LinearLayout) {
-        content.addView(
-            menuRow(
-                getString(R.string.youtube_account_title),
-                YouTubeAuth.accountSummary()
-            ) {
-                showYouTubeAccountDialog()
-            }
-        )
         // Premium chip grid: music audio quality (v1.7.1)
         content.addView(sectionLabel(getString(R.string.settings_audio_quality)))
         content.addView(
@@ -766,14 +851,7 @@ class SettingsPageActivity : AppCompatActivity() {
                 perRow = 3
             )
         )
-        content.addView(
-            menuRow(
-                getString(R.string.settings_download_folder),
-                AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
-            ) {
-                showDownloadFolderPicker()
-            }
-        )
+
         // Premium chip grid: crossfade (v1.7.1)
         content.addView(sectionLabel(getString(R.string.settings_crossfade)))
         content.addView(
@@ -791,14 +869,29 @@ class SettingsPageActivity : AppCompatActivity() {
             )
         )
         content.addView(
-            menuRow(
-                getString(R.string.settings_autoplay_next_song),
-                if (AppPrefs.musicAutoplayNext) getString(R.string.on) else getString(R.string.off)
-            ) {
-                AppPrefs.musicAutoplayNext = !AppPrefs.musicAutoplayNext
-                PlaybackCenter.applyMusicAutoplay()
-                render()
-            }
+            menuGrid(
+                listOf(
+                    GridItem(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
+                        showYouTubeAccountDialog()
+                    },
+                    GridItem(
+                        R.drawable.ic_download,
+                        getString(R.string.settings_download_folder),
+                        AppPrefs.downloadFolderSummary().substringAfterLast("/storage/emulated/0/")
+                    ) {
+                        showDownloadFolderPicker()
+                    },
+                    GridItem(
+                        R.drawable.ic_headset,
+                        getString(R.string.settings_autoplay_next_song),
+                        if (AppPrefs.musicAutoplayNext) getString(R.string.on) else getString(R.string.off)
+                    ) {
+                        AppPrefs.musicAutoplayNext = !AppPrefs.musicAutoplayNext
+                        PlaybackCenter.applyMusicAutoplay()
+                        render()
+                    }
+                )
+            )
         )
     }
 

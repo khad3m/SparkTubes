@@ -39,6 +39,8 @@ class MenuFragment : Fragment() {
         Motion.pressable(binding.rowSettings, 0.96f)
         Motion.pressable(binding.rowVideoSettings, 0.96f)
         Motion.pressable(binding.rowMusicSettings, 0.96f)
+        Motion.pressable(binding.rowGoogleAccount, 0.96f)
+        Motion.pressable(binding.rowCheckUpdate, 0.96f)
 
         binding.profileHeroCard.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)
@@ -52,6 +54,12 @@ class MenuFragment : Fragment() {
         }
         binding.rowMusicSettings.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_MUSIC)
+        }
+        binding.rowGoogleAccount.setOnClickListener {
+            com.sparktube.app.ui.auth.YouTubeLoginActivity.start(requireContext())
+        }
+        binding.rowCheckUpdate.setOnClickListener {
+            SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)
         }
     }
 
@@ -67,6 +75,8 @@ class MenuFragment : Fragment() {
         } else {
             getString(R.string.profile_subtitle)
         }
+        binding.accountValue.text = YouTubeAuth.accountSummary()
+        binding.versionValue.text = "v${com.sparktube.app.BuildConfig.VERSION_NAME}" 
     }
 
     private fun showCountryPicker() {

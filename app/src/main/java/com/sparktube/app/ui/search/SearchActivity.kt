@@ -135,11 +135,11 @@ class SearchActivity : AppCompatActivity() {
             },
             onDelete = { entry ->
                 LocalStore.removeSearch(this, entry, musicMode)
-                val text = binding.searchInput.text?.toString().orEmpty()
-                if (text.length < 2) {
+                val trimmed = binding.searchInput.text?.toString()?.trim().orEmpty()
+                if (trimmed.isEmpty()) {
                     showHistoryRows()
                 } else {
-                    showMergedRows(text, lastSuggestions)
+                    showMergedRows(trimmed, lastSuggestions)
                 }
             }
         )
@@ -196,13 +196,20 @@ class SearchActivity : AppCompatActivity() {
                     // The input matches what is already searched: show results.
                     return
                 }
-                if (text.length < 2) {
+                val trimmed = text.trim()
+                if (trimmed.isEmpty()) {
                     suggestionJob?.cancel()
                     lastSuggestions = emptyList()
                     showHistoryRows()
                     return
                 }
-                queueSuggestions(text)
+                showMergedRows(trimmed, emptyList())
+                if (trimmed.length >= 2) {
+                    queueSuggestions(trimmed)
+                } else {
+                    suggestionJob?.cancel()
+                    lastSuggestions = emptyList()
+                }
             }
 
             override fun afterTextChanged(s: Editable?) = Unit
@@ -376,6 +383,8 @@ class SearchActivity : AppCompatActivity() {
                     lastSuggestions = suggestions
                     showMergedRows(text, suggestions)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // Suggestions are best-effort only.
             }

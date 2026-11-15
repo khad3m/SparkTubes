@@ -56,6 +56,7 @@ class PlaylistActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { finish() }
         binding.playAllButton.setOnClickListener { playFrom(0) }
+        binding.playMusicAllButton.setOnClickListener { playMusicFrom(0) }
     }
 
     override fun onResume() {
@@ -94,6 +95,16 @@ class PlaylistActivity : AppCompatActivity() {
         if (videos.isEmpty()) return
         PlaybackCenter.playPlaylist(videos.map { it.toQueueEntry() }, index.coerceAtLeast(0))
         PlayerActivity.startResume(this)
+    }
+
+    private fun playMusicFrom(index: Int) {
+        if (videos.isEmpty()) return
+        PlaybackCenter.playMusicQueue(
+            videos.map { it.toQueueEntry(isMusic = true) },
+            index.coerceAtLeast(0),
+            allowRadio = true
+        )
+        com.sparktube.app.ui.music.NowPlayingActivity.start(this)
     }
 
     private fun confirmRemove(model: VideoUiModel) {

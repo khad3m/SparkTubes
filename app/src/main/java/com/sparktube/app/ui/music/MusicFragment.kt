@@ -78,6 +78,7 @@ class MusicFragment : Fragment(), ScrollsToTop {
         binding.swipe.setOnRefreshListener { load(fromPull = true) }
         Motion.pressable(binding.favoritesButton, 0.97f)
         Motion.pressable(binding.downloadsButton, 0.97f)
+        Motion.pressable(binding.playlistsButton, 0.97f)
         Motion.pressable(binding.searchButton, 0.98f)
         Motion.pressable(binding.profileBadge, 0.9f)
 
@@ -89,6 +90,9 @@ class MusicFragment : Fragment(), ScrollsToTop {
         }
         binding.downloadsButton.setOnClickListener {
             MusicListActivity.start(requireContext(), favourites = false)
+        }
+        binding.playlistsButton.setOnClickListener {
+            showPlaylistMusicPicker()
         }
         binding.profileBadge.setOnClickListener {
             if (PlaybackCenter.hasMedia) {
@@ -145,6 +149,26 @@ class MusicFragment : Fragment(), ScrollsToTop {
     private fun playSong(model: VideoUiModel, radio: Boolean) {
         PlaybackCenter.playMusic(model.toQueueEntry(isMusic = true), radio = radio)
         NowPlayingActivity.start(requireContext())
+    }
+
+    private fun showPlaylistMusicPicker() {
+        val ctx = requireContext()
+        val playlists = LocalStore.playlists(ctx).filter { it.items.isNotEmpty() }
+        if (playlists.isEmpty()) {
+            Toast.makeText(ctx, "No playlists with songs yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val names = playlists.map { "${it.name} (${it.items.size})" }.toTypedArray()
+        androidx.appcompat.app.AlertDialog.Builder(ctx)
+            .setTitle("Play Playlist as Music")
+            .setItems(names) { _, which ->
+                val chosen = playlists[which]
+                val entries = chosen.items.map { it.toUiModel().toQueueEntry(isMusic = true) }
+                PlaybackCenter.playMusicQueue(entries, 0, allowRadio = true)
+                NowPlayingActivity.start(ctx)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun load(fromPull: Boolean = false) {

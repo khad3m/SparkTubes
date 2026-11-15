@@ -153,6 +153,8 @@ object YtRepository {
             val lists = HOME_KIOSKS.mapNotNull { kioskId ->
                 try {
                     fetchKiosk(kioskId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     lastError = e
                     emptyList()
@@ -470,11 +472,49 @@ object YtRepository {
      */
     suspend fun shortsFeed(countryCode: String): List<ShortsFeedItem> =
         withContext(Dispatchers.IO) {
+            val queries = listOf(
+                "indian model reels shorts",
+                "hindi romantic movie scene shorts",
+                "hindi trending reels shorts",
+                "instagram reels girl fashion shorts",
+                "bollywood romantic status shorts",
+                "bollywood trending shorts"
+            )
+            val buckets = coroutineScope {
+                queries.map { q ->
+                    async { shortsSearchInnerTube(q, countryCode) }
+                }.awaitAll()
+            }
             val out = LinkedHashMap<String, ShortsFeedItem>()
-            for (query in listOf("trending shorts", "viral shorts", "shorts")) {
-                if (out.size >= 30) break
-                val page = shortsSearchInnerTube(query, countryCode)
-                for (item in page) {
+            val maxLen = buckets.maxOfOrNull { it.size } ?: 0
+            for (idx in 0 until maxLen) {
+                for (bucket in buckets) {
+                    val item = bucket.getOrNull(idx) ?: continue
+                    if (item.videoId.length == 11) {
+                        out.putIfAbsent(item.videoId, item)
+                    }
+                }
+            }
+            out.values.toList()
+        }
+
+    suspend fun shortsFeedMore(countryCode: String, pageIndex: Int): List<ShortsFeedItem> =
+        withContext(Dispatchers.IO) {
+            val pool = listOf(
+                listOf("desi model reels shorts", "new hindi romantic song status shorts"),
+                listOf("bollywood actress reels shorts", "trending love status hindi shorts"),
+                listOf("viral indian dance reels shorts", "sad romantic movie scene hindi shorts"),
+                listOf("fashion influencer reels india shorts", "hindi hit songs shorts")
+            )
+            val batch = pool[pageIndex.coerceAtLeast(0) % pool.size]
+            val buckets = coroutineScope {
+                batch.map { q -> async { shortsSearchInnerTube(q, countryCode) } }.awaitAll()
+            }
+            val out = LinkedHashMap<String, ShortsFeedItem>()
+            val maxLen = buckets.maxOfOrNull { it.size } ?: 0
+            for (idx in 0 until maxLen) {
+                for (bucket in buckets) {
+                    val item = bucket.getOrNull(idx) ?: continue
                     if (item.videoId.length == 11) out.putIfAbsent(item.videoId, item)
                 }
             }
@@ -1006,6 +1046,8 @@ object YtRepository {
             lrclibSearch("https://lrclib.net/api/search?q=${enc("$title $artist".trim())}")
                 ?.let { arr -> toLyricsResult(sortByDuration(arr, durationSec))?.let { return@withContext it } }
             null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }
@@ -1171,6 +1213,8 @@ object YtRepository {
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
                 JSONObject(text).optLong("dislikes", -1L)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 -1L
             }

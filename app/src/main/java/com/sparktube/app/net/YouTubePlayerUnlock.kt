@@ -102,11 +102,12 @@ object YouTubePlayerUnlock {
             // that are merely bot-checked, not age-gated.
             val candidates = if (loggedIn) {
                 listOf(
+                    FallbackSpec("MWEB", useCookies = true),
                     FallbackSpec("WEB", useCookies = true),
-                    FallbackSpec("ANDROID", useCookies = true),
                     FallbackSpec("TVHTML5", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
                     FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
+                    FallbackSpec("ANDROID", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY", useCookies = true),
                     FallbackSpec("ANDROID_VR", useCookies = false),
                     FallbackSpec("IOS", useCookies = false),
@@ -123,21 +124,27 @@ object YouTubePlayerUnlock {
             }
 
             var bestFallback: JSONObject? = null
+            var cipherFallback: JSONObject? = null
             for (spec in candidates) {
                 val fb = fetchFallbackPlayer(videoId, spec, httpClient, reqJson) ?: continue
                 val st = fb.optJSONObject("playabilityStatus")
                 Log.d(
                     TAG,
                     "$videoId ${spec.kind} cookies=${spec.useCookies} status=${st?.optString("status")} " +
-                        "reason=${st?.optString("reason")} playable=${isPlayableWithStreamSources(fb)}"
+                        "reason=${st?.optString("reason")} direct=${isPlayableWithDirectUrls(fb)} playable=${isPlayableWithStreamSources(fb)}"
                 )
-                if (isPlayableWithStreamSources(fb)) {
+                if (isPlayableWithDirectUrls(fb)) {
                     bestFallback = fb
                     break
                 }
-                if (bestFallback == null && hasAnyStreamingData(fb)) {
+                if (isPlayableWithStreamSources(fb) && cipherFallback == null) {
+                    cipherFallback = fb
+                } else if (bestFallback == null && hasAnyStreamingData(fb)) {
                     bestFallback = fb
                 }
+            }
+            if (bestFallback == null) {
+                bestFallback = cipherFallback
             }
 
             if (bestFallback != null) {
@@ -242,11 +249,12 @@ object YouTubePlayerUnlock {
         origRequest: JSONObject?
     ): JSONObject? = runCatching {
         val payload = buildClientPayload(videoId, spec.kind)
-        // Reuse the signatureTimestamp / PO token NewPipe already built for this request so
-        // ciphered URLs from the fallback client can be decrypted with the same player JS.
-        origRequest?.optJSONObject("playbackContext")?.let { payload.put("playbackContext", it) }
-        origRequest?.optJSONObject("serviceIntegrityDimensions")?.let {
-            payload.put("serviceIntegrityDimensions", it)
+        val origClient = origRequest?.optJSONObject("context")?.optJSONObject("client")?.optString("clientName").orEmpty()
+        if (origClient.equals(spec.kind, ignoreCase = true)) {
+            origRequest?.optJSONObject("playbackContext")?.let { payload.put("playbackContext", it) }
+            origRequest?.optJSONObject("serviceIntegrityDimensions")?.let {
+                payload.put("serviceIntegrityDimensions", it)
+            }
         }
         val reqBuilder = Request.Builder()
             .url(PLAYER_ENDPOINT)
@@ -302,12 +310,15 @@ object YouTubePlayerUnlock {
                 reqBuilder.header("X-YouTube-Client-Name", "30")
                 reqBuilder.header("X-YouTube-Client-Version", "1.9")
             }
+            "MWEB" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_WEB_CHROME)
+                reqBuilder.header("X-YouTube-Client-Name", "2")
+                reqBuilder.header("X-YouTube-Client-Version", "2.20250312.01.00")
+                reqBuilder.header("Origin", "https://m.youtube.com")
+                reqBuilder.header("Referer", "https://m.youtube.com/watch?v=$videoId")
+            }
             else -> {
-                // WEB (also used by the explicit "WEB" spec): the signed-in
-                // browser client. Session cookies + SAPISIDHASH arrive via
-                // applyYouTubeAuthToRequest below — this is what unlocks
-                // age-restricted videos for logged-in users.
-                reqBuilder.header("User-Agent", OkHttpDownloader.USER_AGENT)
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_WEB_CHROME)
                 reqBuilder.header("X-YouTube-Client-Name", "1")
                 reqBuilder.header("X-YouTube-Client-Version", "2.20250312.01.00")
                 reqBuilder.header("Origin", "https://www.youtube.com")
@@ -404,11 +415,18 @@ object YouTubePlayerUnlock {
                 .put("gl", "US")
                 .put("utcOffsetMinutes", 0)
 
+            "MWEB" -> JSONObject()
+                .put("clientName", "MWEB")
+                .put("clientVersion", "2.20250312.01.00")
+                .put("hl", "en")
+                .put("gl", com.sparktube.app.util.AppPrefs.countryOrDefault.ifBlank { "US" })
+                .put("utcOffsetMinutes", 0)
+
             else -> JSONObject()
                 .put("clientName", "WEB")
                 .put("clientVersion", "2.20250312.01.00")
                 .put("hl", "en")
-                .put("gl", "US")
+                .put("gl", com.sparktube.app.util.AppPrefs.countryOrDefault.ifBlank { "US" })
                 .put("utcOffsetMinutes", 0)
         }
 

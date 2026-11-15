@@ -129,6 +129,8 @@ class ChannelActivity : AppCompatActivity() {
                 val known = items.map { it.url }.toSet()
                 items.addAll(videos.map { it.toUiModel() }.filter { it.url !in known })
                 adapter.submitList(items.toList())
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 page = null
             } finally {

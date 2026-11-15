@@ -521,10 +521,10 @@ class PlayerActivity : AppCompatActivity() {
         val visible = !isInPictureInPictureMode && controllerVisible && !isScreenLocked
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         binding.fullscreenButton.isVisible = visible
-        binding.lockButton.isVisible = visible
-        binding.ccButton.isVisible = visible
-        binding.scaleButton.isVisible = visible && landscape
-        binding.speedButton.isVisible = visible
+        binding.lockButton.isVisible = false
+        binding.ccButton.isVisible = false
+        binding.scaleButton.isVisible = false
+        binding.speedButton.isVisible = false
         binding.fullscreenVideosGridBtn.isVisible = visible && landscape
         binding.topLeftModeSwitcher.isVisible = !isInPictureInPictureMode && !isScreenLocked && (!landscape || controllerVisible)
     }
@@ -978,6 +978,19 @@ class PlayerActivity : AppCompatActivity() {
         showSheet(sheet, root, peekDp = 320)
     }
 
+    private fun bestQualityLabel(catalog: StreamCatalog): String {
+        val best = (catalog.videoOnly + catalog.muxed)
+            .maxByOrNull { it.effectiveHeight() * 100 + it.fps }
+            ?: return getString(R.string.quality_auto_short)
+        val h = best.effectiveHeight()
+        return when {
+            h >= 2160 -> "4K"
+            h > 0 && best.fps > 30 -> "${h}p${best.fps}"
+            h > 0 -> "${h}p"
+            else -> getString(R.string.quality_auto_short)
+        }
+    }
+
     private fun bindDescription(catalog: StreamCatalog, url: String) {
         val meta = listOfNotNull(
             catalog.viewCount.takeIf { it >= 0 }
@@ -985,8 +998,9 @@ class PlayerActivity : AppCompatActivity() {
             catalog.uploadDateText.takeIf { it.isNotBlank() }
         ).joinToString("  ·  ")
         binding.views.text = meta
-        binding.qualityBadgeInfo.text = "${qualitySummary(catalog)} · ${speedSummary()}"
+        binding.qualityBadgeInfo.text = bestQualityLabel(catalog)
         binding.descCard.isVisible = true
+        com.sparktube.app.ui.music.Motion.pressable(binding.descCard, 0.98f)
 
         if (descBoundFor == url) return
         descBoundFor = url
@@ -994,28 +1008,17 @@ class PlayerActivity : AppCompatActivity() {
         applyDescriptionState(animate = false)
 
         val text = CommentAdapter.bodyToText(catalog.description, catalog.descriptionIsHtml)
-        val hasDescription = text.isNotBlank()
-        binding.description.isVisible = hasDescription
+        val hasDescription = text.isNotBlank() || meta.isNotBlank()
+        binding.description.isVisible = text.isNotBlank()
         binding.descCard.isClickable = hasDescription
         binding.descChevron.isVisible = hasDescription
-        binding.descToggle.isVisible = false
-        if (hasDescription) {
+        if (text.isNotBlank()) {
             binding.description.text = text
-            binding.description.doOnPreDraw { updateDescToggleVisibility() }
         }
     }
 
-    private fun updateDescToggleVisibility() {
-        val layout = binding.description.layout ?: return
-        val truncated = layout.lineCount > 0 &&
-            layout.getEllipsisCount(layout.lineCount - 1) > 0
-        val show = descExpanded || truncated
-        binding.descToggle.isVisible = show
-        binding.descChevron.isVisible = show
-    }
-
     private fun toggleDescription() {
-        if (!binding.description.isVisible) return
+        if (!binding.descCard.isClickable) return
         descExpanded = !descExpanded
         applyDescriptionState(animate = true)
     }
@@ -1028,22 +1031,16 @@ class PlayerActivity : AppCompatActivity() {
                 android.transition.ChangeBounds().apply { duration = 200 }
             )
         }
-        binding.description.maxLines = if (descExpanded) Int.MAX_VALUE else DESC_COLLAPSED_LINES
+        binding.descBody.isVisible = descExpanded
+        binding.description.maxLines = Int.MAX_VALUE
         binding.description.movementMethod =
             if (descExpanded) LinkMovementMethod.getInstance() else null
-        binding.descToggle.setText(
-            if (descExpanded) R.string.desc_show_less else R.string.desc_show_more
-        )
         val target = if (descExpanded) 0f else 180f
         if (animated) {
             binding.descChevron.animate().rotation(target).setDuration(200).start()
         } else {
             binding.descChevron.animate().cancel()
             binding.descChevron.rotation = target
-        }
-        if (descExpanded) {
-            binding.descToggle.isVisible = true
-            binding.descChevron.isVisible = true
         }
     }
 
@@ -1135,6 +1132,8 @@ class PlayerActivity : AppCompatActivity() {
                 binding.channelSubs.text =
                     getString(R.string.subscribers_fmt, Formatters.formatViewCount(channel.subscriberCount))
                 updateSubscribeUi()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
             }
         }
@@ -1591,11 +1590,110 @@ class PlayerActivity : AppCompatActivity() {
             )
         }
 
-    private fun showSheet(sheet: BottomSheetDialog, root: LinearLayout, peekDp: Int = 420) {
-        val scroll = android.widget.ScrollView(this).apply { addView(root) }
+    private fun showSheet(sheet: BottomSheetDialog, root: LinearLayout, peekDp: Int = 460) {
+        root.setBackgroundResource(R.drawable.bg_glass_reddish_sheet)
+        val handle = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                bottomMargin = dp(12)
+            }
+            background = GradientDrawable().apply {
+                cornerRadius = dp(2).toFloat()
+                setColor(0x66FFFFFF)
+            }
+        }
+        root.addView(handle, 0)
+        val scroll = android.widget.ScrollView(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            addView(root)
+        }
         sheet.setContentView(scroll)
         sheet.behavior.peekHeight = dp(peekDp)
+        sheet.setOnShowListener {
+            sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
+                ?.setBackgroundColor(Color.TRANSPARENT)
+        }
         sheet.show()
+    }
+
+    private data class SettingsGridTile(
+        val iconRes: Int,
+        val title: String,
+        val value: String,
+        val onClick: () -> Unit
+    )
+
+    private fun settingsGridCard(tile: SettingsGridTile): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.START
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setBackgroundResource(R.drawable.bg_glass_reddish_tile)
+            isClickable = true
+            isFocusable = true
+            com.sparktube.app.ui.music.Motion.pressable(this, 0.95f)
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                tile.onClick()
+            }
+
+            val topRow = LinearLayout(this@PlayerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val iconBadge = android.widget.FrameLayout(this@PlayerActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(38), dp(38))
+                setBackgroundResource(R.drawable.bg_glass_reddish_circle)
+                addView(
+                    android.widget.ImageView(this@PlayerActivity).apply {
+                        setImageResource(tile.iconRes)
+                        setColorFilter(Color.WHITE)
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                        layoutParams = android.widget.FrameLayout.LayoutParams(dp(19), dp(19), Gravity.CENTER)
+                    }
+                )
+            }
+            topRow.addView(iconBadge)
+            topRow.addView(android.widget.Space(this@PlayerActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+            })
+            topRow.addView(
+                TextView(this@PlayerActivity).apply {
+                    text = tile.value
+                    textSize = 10.5f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    maxWidth = dp(86)
+                    setTextColor(0xFFFFE4E8.toInt())
+                    setTypeface(null, Typeface.BOLD)
+                    setBackgroundResource(R.drawable.bg_glass_reddish_pill)
+                    setPadding(dp(8), dp(3), dp(8), dp(3))
+                }
+            )
+            addView(topRow)
+
+            addView(
+                TextView(this@PlayerActivity).apply {
+                    text = tile.title
+                    textSize = 14f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setTextColor(Color.WHITE)
+                    setTypeface(null, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).also { it.topMargin = dp(12) }
+                }
+            )
+        }
+
+    private fun scaleModeSummary(): String = when (AppPrefs.fullscreenScale) {
+        AppPrefs.SCALE_CROP -> getString(R.string.scale_crop)
+        AppPrefs.SCALE_STRETCH -> getString(R.string.scale_stretch)
+        else -> getString(R.string.scale_fit)
     }
 
     private fun showVideoSettingsSheet() {
@@ -1603,47 +1701,50 @@ class PlayerActivity : AppCompatActivity() {
 
         val sheet = BottomSheetDialog(this)
         val root = sheetRoot()
-        root.addView(sheetTitle(getString(R.string.video_settings)))
+        root.addView(
+            sheetTitle(getString(R.string.video_settings)).apply {
+                setTextColor(Color.WHITE)
+                setPadding(dp(2), 0, 0, dp(10))
+            }
+        )
 
+        val tiles = mutableListOf<SettingsGridTile>()
         if (catalog != null) {
-            root.addView(
-                sheetMenuRow(getString(R.string.settings_quality_section), qualitySummary(catalog)) {
+            tiles.add(
+                SettingsGridTile(R.drawable.ic_tune, getString(R.string.settings_quality_section), qualitySummary(catalog)) {
                     sheet.dismiss()
                     showQualitySheet()
                 }
             )
         }
-        root.addView(
-            sheetMenuRow(getString(R.string.subtitles_section), subtitleModeSummary()) {
+        tiles.add(
+            SettingsGridTile(R.drawable.ic_subtitles, getString(R.string.subtitles_section), subtitleModeSummary()) {
                 sheet.dismiss()
                 showSubtitleModeSheet()
             }
         )
-        root.addView(
-            sheetMenuRow(getString(R.string.settings_speed_section), speedSummary()) {
+        tiles.add(
+            SettingsGridTile(R.drawable.ic_speed, getString(R.string.settings_speed_section), speedSummary()) {
                 sheet.dismiss()
                 showSpeedSheet()
             }
         )
-        root.addView(
-            sheetMenuRow(getString(R.string.action_screen_lock), getString(R.string.off)) {
+        tiles.add(
+            SettingsGridTile(R.drawable.ic_lock, getString(R.string.action_screen_lock), getString(R.string.tap_to_unlock).substringBefore(" ")) {
                 sheet.dismiss()
                 setScreenLocked(true)
             }
         )
-        root.addView(
-            sheetMenuRow(
-                getString(R.string.youtube_account_title),
-                YouTubeAuth.accountSummary()
-            ) {
+        tiles.add(
+            SettingsGridTile(R.drawable.ic_fullscreen, getString(R.string.action_scale_mode), scaleModeSummary()) {
                 sheet.dismiss()
-                awaitingLoginRetry = true
-                YouTubeLoginActivity.start(this)
+                cycleScaleMode()
             }
         )
-        root.addView(
-            sheetMenuRow(
-                "SponsorBlock Auto-Skip",
+        tiles.add(
+            SettingsGridTile(
+                R.drawable.ic_player_replay,
+                "SponsorBlock",
                 if (AppPrefs.sponsorBlock) getString(R.string.on) else getString(R.string.off)
             ) {
                 AppPrefs.sponsorBlock = !AppPrefs.sponsorBlock
@@ -1655,16 +1756,54 @@ class PlayerActivity : AppCompatActivity() {
                 ).show()
             }
         )
+        tiles.add(
+            SettingsGridTile(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
+                sheet.dismiss()
+                awaitingLoginRetry = true
+                YouTubeLoginActivity.start(this)
+            }
+        )
         if (catalog != null && catalog.audioTracks.size > 1) {
-            root.addView(
-                sheetMenuRow(getString(R.string.settings_audio_track_section), audioTrackSummary(catalog)) {
+            tiles.add(
+                SettingsGridTile(R.drawable.ic_audiotrack, getString(R.string.settings_audio_track_section), audioTrackSummary(catalog)) {
                     sheet.dismiss()
                     showAudioTrackSheet()
                 }
             )
         }
 
-        showSheet(sheet, root, peekDp = 420)
+        var i = 0
+        while (i < tiles.size) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                isBaselineAligned = false
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).also { it.topMargin = dp(10) }
+            }
+            val left = settingsGridCard(tiles[i]).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .also { it.marginEnd = dp(5) }
+            }
+            row.addView(left)
+            if (i + 1 < tiles.size) {
+                val right = settingsGridCard(tiles[i + 1]).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        .also { it.marginStart = dp(5) }
+                }
+                row.addView(right)
+            } else {
+                row.addView(
+                    android.widget.Space(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, 1, 1f).also { it.marginStart = dp(5) }
+                    }
+                )
+            }
+            root.addView(row)
+            i += 2
+        }
+
+        showSheet(sheet, root, peekDp = 480)
     }
 
     private fun qualitySummary(catalog: StreamCatalog): String {

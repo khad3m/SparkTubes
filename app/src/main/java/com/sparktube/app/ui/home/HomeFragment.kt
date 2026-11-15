@@ -113,6 +113,9 @@ class HomeFragment : Fragment(), ScrollsToTop {
     private fun setupCategoryChips() {
         val chips: List<Pair<TextView, String?>> = listOf(
             binding.chipAll to null,
+            binding.chipBanglaNews to "bangla news today latest",
+            binding.chipBanglaSong to "new bangla song latest",
+            binding.chipLatestHindi to "latest hindi song new",
             binding.chipMusic to "music",
             binding.chipGaming to "gaming",
             binding.chipTech to "technology ai review",

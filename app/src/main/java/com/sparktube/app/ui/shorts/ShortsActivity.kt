@@ -62,6 +62,8 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
 
     /** Position the snap helper last settled on. */
     private var settledPosition = -1
+    private var loadingMore = false
+    private var morePage = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Themes.apply(this)
@@ -166,20 +168,60 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
         val page = adapter.pageAt(position) ?: return
         val model = shorts[position]
 
-        // Move the shared player surface to the newly settled page.
-        if (attachedPage !== page) {
-            attachedPage?.let { PlaybackCenter.detachView(it.videoSlot) }
-            attachedPage = page
-            applyFillModeToAttachedPage()
-            PlaybackCenter.attachView(page.videoSlot)
-        }
-
         if (PlaybackCenter.currentEntry?.url != model.url) {
             PlaybackCenter.playVideo(model.toQueueEntry(isMusic = false))
         } else if (resume) {
             runCatching { PlaybackCenter.player.play() }
         }
+
+        // Move the shared player surface to the newly settled page AFTER playVideo
+        // ensures playerRef is initialized.
+        if (attachedPage !== page || page.videoSlot.player == null) {
+            attachedPage?.let { if (it !== page) PlaybackCenter.detachView(it.videoSlot) }
+            attachedPage = page
+            applyFillModeToAttachedPage()
+            PlaybackCenter.attachView(page.videoSlot)
+        }
         updatePageUi(page)
+        if (position >= shorts.size - 5) {
+            loadMoreShorts()
+        }
+    }
+
+    private fun loadMoreShorts() {
+        if (loadingMore) return
+        loadingMore = true
+        val pageIdx = morePage++
+        lifecycleScope.launch {
+            try {
+                val extra = YtRepository.shortsFeedMore(AppPrefs.countryOrDefault, pageIdx)
+                val known = shorts.map { it.url }.toHashSet()
+                val additions = extra.mapNotNull { item ->
+                    val url = "https://www.youtube.com/watch?v=${item.videoId}"
+                    if (known.add(url)) {
+                        com.sparktube.app.ui.common.VideoUiModel(
+                            url = url,
+                            title = item.title,
+                            uploader = item.uploader,
+                            thumbnailUrl = item.thumbnailUrl,
+                            durationSec = 0L,
+                            viewCount = 0L,
+                            uploadDate = ""
+                        )
+                    } else null
+                }
+                if (additions.isNotEmpty()) {
+                    val start = shorts.size
+                    shorts.addAll(additions)
+                    adapter.notifyItemRangeInserted(start, additions.size)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            } finally {
+                loadingMore = false
+            }
+        }
     }
 
     /** Center tap: play/pause (restart the short when it already ended). */
@@ -219,7 +261,19 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
     }
 
     private fun updateCurrentPageUi() {
-        attachedPage?.let { updatePageUi(it) }
+        attachedPage?.let { page ->
+            if (page.videoSlot.player == null && PlaybackCenter.hasMedia) {
+                applyFillModeToAttachedPage()
+                PlaybackCenter.attachView(page.videoSlot)
+            }
+            updatePageUi(page)
+        }
+    }
+
+    override fun onDestroy() {
+        attachedPage?.let { PlaybackCenter.detachView(it.videoSlot) }
+        attachedPage = null
+        super.onDestroy()
     }
 
     // ----- PlaybackCenter.Listener -----
@@ -309,7 +363,7 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
         // 3) Search top-up
         if (out.size < 12) {
             runCatching {
-                YtRepository.searchVideos("trending shorts clips", null).items
+                YtRepository.searchVideos("hindi romantic trending reels shorts", null).items
             }.getOrDefault(emptyList())
                 .filter { it.duration in 1L..180L }
                 .forEach { item ->
@@ -437,12 +491,12 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
         private val onVideoTap: () -> Unit
     ) : RecyclerView.Adapter<ShortsPagerAdapter.VH>() {
 
-        private val pages = arrayOfNulls<ShortsPageView>(items.size)
+        private val pages = HashMap<Int, ShortsPageView>()
 
         class VH(val page: ShortsPageView) : RecyclerView.ViewHolder(page)
 
         fun pageAt(position: Int): ShortsPageView? =
-            pages.getOrNull(position)
+            pages[position]
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
             val page = ShortsPageView(parent.context, onVideoTap).apply {
@@ -458,7 +512,7 @@ class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val model = items[position]
             val page = holder.page
-            if (position < pages.size) pages[position] = page
+            pages[position] = page
             Thumbs.load(page.cover, model.thumbnailUrl)
             page.title.text = model.title
             page.subtitle.text = model.uploader

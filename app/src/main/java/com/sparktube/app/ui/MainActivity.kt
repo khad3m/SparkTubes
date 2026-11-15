@@ -171,16 +171,9 @@ class MainActivity : AppCompatActivity() {
             val latest = UpdateChecker.fetchLatest() ?: return@launch
             if (isFinishing || isDestroyed) return@launch
             if (UpdateChecker.isNewer(BuildConfig.VERSION_NAME, latest.tag)) {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("${getString(R.string.update_available_title)} (${latest.tag})")
-                    .setMessage(latest.body.ifBlank { latest.name })
-                    .setPositiveButton(R.string.update_download) { _, _ ->
-                        // In-app download with a live progress bar, then the
-                        // system installer — no browser involved.
-                        com.sparktube.app.ui.common.UpdateDownloadUi.start(this@MainActivity, latest, lifecycleScope)
-                    }
-                    .setNegativeButton(R.string.later, null)
-                    .show()
+                com.sparktube.app.ui.common.UpdateDownloadUi.showAvailableSheet(
+                    this@MainActivity, latest, lifecycleScope
+                )
             }
         }
     }

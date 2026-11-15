@@ -685,6 +685,19 @@ class NowPlayingActivity : AppCompatActivity() {
             setPadding(0, px(3), 0, 0)
         })
 
+        // ----- Lyrics section (top of Timer / Audio Studio sheet) -----
+        root.addView(sectionLabel("SYNCED LYRICS"))
+        root.addView(chipRow(listOf(
+            Triple("🎤 Lyrics On", lyricsVisible) {
+                if (!lyricsVisible) toggleLyrics()
+                Toast.makeText(this, "Synced Lyrics: On", Toast.LENGTH_SHORT).show()
+            },
+            Triple("Lyrics Off", !lyricsVisible) {
+                if (lyricsVisible) toggleLyrics()
+                Toast.makeText(this, "Synced Lyrics: Off", Toast.LENGTH_SHORT).show()
+            }
+        )))
+
         // ----- Sleep Timer section -----
         root.addView(sectionLabel("SLEEP TIMER"))
         val sleepRem = PlaybackCenter.sleepTimerRemainingMs
@@ -711,24 +724,37 @@ class NowPlayingActivity : AppCompatActivity() {
         )))
 
         // ----- Equalizer section -----
-        root.addView(sectionLabel("EQUALIZER"))
+        root.addView(sectionLabel("EQUALIZER & VOICE CONTROL"))
+        val curEq = AppPrefs.eqPresetIndex
+        val eqControls = listOf(
+            Triple("🚫 Disable EQ", 0, curEq == 0),
+            Triple("🔇 Noise Cancel", 1, curEq == 1),
+            Triple("🎤 Only Vocal", 2, curEq == 2)
+        )
+        root.addView(chipRow(eqControls.map { (label, index, active) ->
+            Triple(label, active) {
+                PlaybackCenter.applyAudioPreset(index, label)
+                Toast.makeText(this, "EQ: ${PlaybackCenter.currentEqPresetLabel}", Toast.LENGTH_SHORT).show()
+            }
+        }))
+
         val eqPresets = listOf(
-            Triple("Flat", 0, PlaybackCenter.currentEqPresetLabel.startsWith("Flat")),
-            Triple("Bass Boost", 1, PlaybackCenter.currentEqPresetLabel.startsWith("Bass")),
-            Triple("Vocal", 2, PlaybackCenter.currentEqPresetLabel.startsWith("Vocal")),
-            Triple("Club", 3, PlaybackCenter.currentEqPresetLabel.startsWith("Club")),
-            Triple("Treble", 4, PlaybackCenter.currentEqPresetLabel.startsWith("Treble"))
+            Triple("🎛 Flat", 3, curEq == 3),
+            Triple("🔊 Bass Boost", 4, curEq == 4),
+            Triple("🎙 Vocal Studio", 5, curEq == 5),
+            Triple("⚡ Club", 6, curEq == 6),
+            Triple("✨ Treble", 7, curEq == 7)
         )
         root.addView(chipRow(eqPresets.take(3).map { (label, index, active) ->
-            Triple("🎛 $label", active) {
+            Triple(label, active) {
                 PlaybackCenter.applyAudioPreset(index, label)
-                Toast.makeText(this, "Audio EQ: $label", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "EQ: ${PlaybackCenter.currentEqPresetLabel}", Toast.LENGTH_SHORT).show()
             }
         }))
         root.addView(chipRow(eqPresets.drop(3).map { (label, index, active) ->
-            Triple("🎛 $label", active) {
+            Triple(label, active) {
                 PlaybackCenter.applyAudioPreset(index, label)
-                Toast.makeText(this, "Audio EQ: $label", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "EQ: ${PlaybackCenter.currentEqPresetLabel}", Toast.LENGTH_SHORT).show()
             }
         }))
 

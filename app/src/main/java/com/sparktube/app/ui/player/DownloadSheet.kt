@@ -81,7 +81,7 @@ class DownloadSheet(
         else -> String.format(java.util.Locale.US, " • %d KB", bytes / 1024L)
     }
 
-    /** For the merged Video+Audio download prefer H.264/MP4 video: it can be remuxed into one file. */
+    /** For the merged Video+Audio download strictly prefer H.264/AVC MP4, then HEVC, then VP9. */
     private fun bestVideoForHeight(height: Int): org.schabi.newpipe.extractor.stream.VideoStream? =
         catalog.allVideoOnly
             .filter { it.effectiveHeight() == height }
@@ -89,7 +89,12 @@ class DownloadSheet(
                 compareByDescending<org.schabi.newpipe.extractor.stream.VideoStream> {
                     val mime = it.format?.mimeType.orEmpty().lowercase()
                     val codec = it.codec.orEmpty().lowercase()
-                    mime.contains("mp4") && (codec.startsWith("avc") || codec.isBlank())
+                    when {
+                        mime.contains("mp4") && codec.startsWith("avc") -> 3
+                        mime.contains("mp4") && !codec.startsWith("av01") -> 2
+                        mime.contains("webm") -> 1
+                        else -> 0
+                    }
                 }.thenByDescending { runCatching { it.itagItem?.bitrate ?: 0 }.getOrDefault(0) }
             )
             .firstOrNull()

@@ -73,13 +73,16 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            android:layout_width="64dp"
-            android:layout_height="44dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
             android:layout_gravity="center"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_np_glass_circle_inset"
             android:contentDescription="@string/cd_back"
-            android:src="@drawable/bg_sheet_handle"
-            app:tint="#66FFFFFF" />
+            android:padding="9dp"
+            android:rotation="180"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_chevron_up"
+            app:tint="@color/white" />
 
         <TextView
             android:id="@+id/playingLabel"

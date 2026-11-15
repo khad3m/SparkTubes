@@ -679,7 +679,8 @@ object DownloadCenter {
             val videoFile = File(record.filePaths[0])
             val audioFile = File(record.filePaths[1])
             if (!videoFile.exists() || !audioFile.exists()) return null
-            val outName = videoFile.name.removeSuffix("_v.mp4") + ".mp4"
+            val ext = if (AvMuxer.isWebmPair(videoFile, audioFile)) ".webm" else ".mp4"
+            val outName = videoFile.name.removeSuffix("_v.mp4") + ext
             val outFile = File(videoFile.parentFile, outName)
             if (!AvMuxer.merge(videoFile, audioFile, outFile)) return null
             runCatching { videoFile.delete() }

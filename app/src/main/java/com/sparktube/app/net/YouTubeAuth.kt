@@ -114,16 +114,28 @@ object YouTubeAuth {
         return merged.entries.joinToString("; ") { "${it.key}=${it.value}" }
     }
 
-    fun buildAuthorizationHeader(origin: String = "https://www.youtube.com"): String? {
-        val sapisid = extractSapisid() ?: return null
-        val epochSec = System.currentTimeMillis() / 1000L
-        val payload = "$epochSec $sapisid $origin"
+    private fun sha1Token(epochSec: Long, secret: String, origin: String): String? {
+        val payload = "$epochSec $secret $origin"
         val sha1Hex = runCatching {
             val digest = MessageDigest.getInstance("SHA-1").digest(payload.toByteArray(Charsets.UTF_8))
             digest.joinToString("") { "%02x".format(Locale.US, it) }
         }.getOrNull() ?: return null
-        val token = "${epochSec}_${sha1Hex}"
-        return "SAPISIDHASH $token SAPISID1PHASH $token SAPISID3PHASH $token"
+        return "${epochSec}_${sha1Hex}"
+    }
+
+    fun buildAuthorizationHeader(origin: String = "https://www.youtube.com"): String? {
+        val map = parseCookieMap(AppPrefs.youtubeCookies)
+        val sapisid = extractSapisid(map) ?: return null
+        val epochSec = System.currentTimeMillis() / 1000L
+        val parts = mutableListOf<String>()
+        sha1Token(epochSec, sapisid, origin)?.let { parts.add("SAPISIDHASH $it") }
+        map["__Secure-1PAPISID"]?.takeIf { it.isNotBlank() }?.let { s1 ->
+            sha1Token(epochSec, s1, origin)?.let { parts.add("SAPISID1PHASH $it") }
+        }
+        map["__Secure-3PAPISID"]?.takeIf { it.isNotBlank() }?.let { s3 ->
+            sha1Token(epochSec, s3, origin)?.let { parts.add("SAPISID3PHASH $it") }
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
     }
 
     fun applyYouTubeAuthToRequest(url: String, builder: Request.Builder, existingCookies: List<String> = emptyList()) {

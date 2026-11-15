@@ -176,7 +176,14 @@ object PlaybackCenter {
 
     /** Equalizer presets; index is what [AppPrefs.eqPresetIndex] stores. */
     val EQ_PRESET_LABELS = listOf(
-        "Flat (Default)", "Bass Boost", "Vocal Studio", "Club Electronic", "Treble Clarity"
+        "Off (Disabled)",
+        "Noise Cancel",
+        "Only Vocal",
+        "Flat (Default)",
+        "Bass Boost",
+        "Vocal Studio",
+        "Club Electronic",
+        "Treble Clarity"
     )
 
     enum class Mode { NONE, VIDEO, AUDIO }
@@ -277,44 +284,64 @@ object PlaybackCenter {
 
     /** Gain (dB) for a band centred at [freqHz] for the given preset. */
     private fun presetGainDb(preset: Int, freqHz: Int): Float = when (preset) {
-        1 -> when { // Bass Boost
+        1 -> when { // Noise Cancel: cut low-end rumble & high-frequency hiss
+            freqHz <= 120 -> -8f
+            freqHz <= 300 -> -3f
+            freqHz <= 1200 -> 1f
+            freqHz <= 4000 -> 2f
+            else -> -7f
+        }
+        2 -> when { // Only Vocal: isolate vocal frequencies, suppress bass & cymbals
+            freqHz <= 200 -> -12f
+            freqHz <= 450 -> -6f
+            freqHz <= 3500 -> 6f
+            freqHz <= 6000 -> 1f
+            else -> -9f
+        }
+        4 -> when { // Bass Boost
             freqHz <= 120 -> 6f
             freqHz <= 300 -> 4f
             freqHz <= 800 -> 1f
             else -> 0f
         }
-        2 -> when { // Vocal / Acoustic
+        5 -> when { // Vocal Studio
             freqHz <= 120 -> -2f
             freqHz <= 400 -> 0f
             freqHz <= 1500 -> 3f
             freqHz <= 5000 -> 4f
             else -> 1f
         }
-        3 -> when { // Electronic / Club
+        6 -> when { // Club Electronic
             freqHz <= 120 -> 5f
             freqHz <= 400 -> 2f
             freqHz <= 2000 -> -2f
             freqHz <= 6000 -> 2f
             else -> 5f
         }
-        4 -> when { // Treble / Clarity
+        7 -> when { // Treble Clarity
             freqHz <= 400 -> -1f
             freqHz <= 2000 -> 0f
             freqHz <= 6000 -> 3f
             else -> 5f
         }
-        else -> 0f // Flat
+        else -> 0f // Off / Flat
     }
 
     private fun bassStrengthFor(preset: Int): Short = when (preset) {
-        1 -> 700
-        3 -> 450
+        4 -> 700
+        6 -> 450
         else -> 0
     }
 
     private fun bindAudioEffectsForSession(sessionId: Int) {
         if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId <= 0) return
         val preset = currentEqPresetIndex
+
+        if (preset == 0) {
+            runCatching { equalizer?.enabled = false }
+            runCatching { bassBoost?.enabled = false }
+            return
+        }
 
         if (boundAudioSessionId != sessionId) {
             runCatching { equalizer?.release() }
