@@ -127,7 +127,7 @@ class StreamCatalog private constructor(
         rawMuxed = info.videoStreams,
         rawAudio = info.audioStreams,
         rawSubtitles = info.subtitles,
-        rawRelated = info.relatedItems
+        rawRelated = info.relatedItems.filterIsInstance<StreamInfoItem>()
     )
 
     val videoOnly: List<VideoStream> = rawVideoOnly

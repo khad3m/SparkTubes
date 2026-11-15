@@ -196,7 +196,7 @@ class MusicFragment : Fragment(), ScrollsToTop {
                     name.isEmpty() -> Toast.makeText(ctx, R.string.playlist_name_empty, Toast.LENGTH_SHORT).show()
                     LocalStore.createPlaylist(ctx, name) == null ->
                         Toast.makeText(ctx, R.string.playlist_name_exists, Toast.LENGTH_SHORT).show()
-                    else -> Toast.makeText(ctx, "Playlist "$name" created! Tap ••• on any song to add.", Toast.LENGTH_SHORT).show()
+                    else -> Toast.makeText(ctx, "Playlist \"$name\" created! Tap ••• on any song to add.", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
