@@ -2136,12 +2136,14 @@ object PlaybackCenter {
         }.getOrElse { err ->
             if (err is LiveContentException) throw err
             val vid = DownloadCenter.videoIdOf(entry.url)
-            val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-            }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
-                ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
-                    ?.let { YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid) }
-                    ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+            val direct = kotlinx.coroutines.runBlocking {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                    ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                        ?.let { YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid) }
+                        ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+            }
             direct ?: throw err
         }
         val audio = pickMusicAudio(c)
