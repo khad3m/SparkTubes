@@ -33,7 +33,7 @@ object PlaylistPicker {
             }
         )
         if (playlists.isEmpty()) {
-            items += ActionSheet.Item(context.getString(R.string.playlist_sheet_empty))
+            items += ActionSheet.Item(context.getString(R.string.playlist_sheet_empty), action = {})
         }
         playlists.forEach { playlist ->
             val added = playlist.items.any { it.url == entry.url }

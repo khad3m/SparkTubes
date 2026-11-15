@@ -1620,7 +1620,7 @@ class PlayerActivity : AppCompatActivity() {
             setBackgroundColor(Color.TRANSPARENT)
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
-            isScrollCacheEnabled = false
+            isScrollingCacheEnabled = false
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
             addView(root)
         }
