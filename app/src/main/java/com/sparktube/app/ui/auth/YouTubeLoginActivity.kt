@@ -139,10 +139,14 @@ class YouTubeLoginActivity : AppCompatActivity() {
                 if (isFinishing || isDestroyed || savedSuccessfully) return
                 val u = url.orEmpty().lowercase(Locale.US)
                 // Auto-detect completed login once redirected back to youtube.com
-                if ((u.contains("youtube.com") && !u.contains("accounts.google.com")) &&
-                    captureCookiesIfPresent(finishActivity = true, silentIfMissing = true)
+                if (u.contains("youtube.com") && !u.contains("accounts.google.com") &&
+                    !u.contains("consent.youtube.com")
                 ) {
-                    return
+                    view?.postDelayed({
+                        if (!isFinishing && !isDestroyed && !savedSuccessfully) {
+                            captureCookiesIfPresent(finishActivity = true, silentIfMissing = true)
+                        }
+                    }, 900L)
                 }
             }
         }

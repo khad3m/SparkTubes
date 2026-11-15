@@ -35,6 +35,7 @@ object YouTubePlayerUnlock {
     private const val TV_VERSION = "7.20250312.16.00"
     private const val WEB_EMBED_VERSION = "1.20250310.01.00"
     private const val PLAYER_ENDPOINT = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+    private const val MWEB_PLAYER_ENDPOINT = "https://m.youtube.com/youtubei/v1/player?prettyPrint=false"
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTypeOrNull()
 
     private val forcedVideoIds: MutableSet<String> =
@@ -67,10 +68,10 @@ object YouTubePlayerUnlock {
         val loggedIn = YouTubeAuth.isLoggedIn()
         val candidates = if (loggedIn) {
             listOf(
+                FallbackSpec("MWEB", useCookies = true),
                 FallbackSpec("TVHTML5", useCookies = true),
                 FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
                 FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
-                FallbackSpec("MWEB", useCookies = true),
                 FallbackSpec("WEB", useCookies = true),
                 FallbackSpec("ANDROID", useCookies = true),
                 FallbackSpec("ANDROID_VR", useCookies = false),
@@ -100,6 +101,12 @@ object YouTubePlayerUnlock {
             deobfuscateStreamingData(it, videoId)
             normalizePlayerJson(it, null, videoId)
         }
+    }
+
+    fun deobfuscateAndNormalize(root: JSONObject, videoId: String): JSONObject {
+        deobfuscateStreamingData(root, videoId)
+        normalizePlayerJson(root, null, videoId)
+        return root
     }
 
     private fun deobfuscateStreamingData(root: JSONObject, videoId: String) {
@@ -389,8 +396,9 @@ object YouTubePlayerUnlock {
                 )
             }
         }
+        val endpoint = if (spec.kind == "MWEB") MWEB_PLAYER_ENDPOINT else PLAYER_ENDPOINT
         val reqBuilder = Request.Builder()
-            .url(PLAYER_ENDPOINT)
+            .url(endpoint)
             .header("Content-Type", "application/json")
             .header("Accept-Language", "en-US,en;q=0.9")
 
@@ -415,7 +423,10 @@ object YouTubePlayerUnlock {
                 reqBuilder.header("Referer", "https://www.youtube.com/tv")
             }
             "WEB_EMBEDDED_PLAYER" -> {
-                reqBuilder.header("User-Agent", YouTubeAuth.UA_WEB_CHROME)
+                reqBuilder.header(
+                    "User-Agent",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+                )
                 reqBuilder.header("X-YouTube-Client-Name", "56")
                 reqBuilder.header("X-YouTube-Client-Version", WEB_EMBED_VERSION)
                 reqBuilder.header("Origin", "https://www.youtube.com")
@@ -460,7 +471,7 @@ object YouTubePlayerUnlock {
         }
 
         if (spec.useCookies && YouTubeAuth.isLoggedIn()) {
-            YouTubeAuth.applyYouTubeAuthToRequest(PLAYER_ENDPOINT, reqBuilder)
+            YouTubeAuth.applyYouTubeAuthToRequest(endpoint, reqBuilder)
         } else {
             reqBuilder.header("Cookie", "CONSENT=YES+cb; SOCS=CAI")
         }

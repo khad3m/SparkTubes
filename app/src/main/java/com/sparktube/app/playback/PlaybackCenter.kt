@@ -602,6 +602,7 @@ object PlaybackCenter {
 
     /** One signed-in unlock retry per play attempt (v1.7.2 age-gate wiring). */
     private var usedSignedInRetry = false
+    private var usedHttpRetry = false
 
     var catalog: StreamCatalog? = null
         private set
@@ -1483,6 +1484,7 @@ object PlaybackCenter {
         }
 
         usedSignedInRetry = false
+        usedHttpRetry = false
         setResolving(true)
         resolveJob = scope.launch {
             try {
@@ -1506,7 +1508,13 @@ object PlaybackCenter {
                     throw LiveContentException()
                 }
                 if (currentEntry?.url != entry.url) return@launch
-                catalog = StreamCatalog(info, entry.url)
+                var resolvedCatalog = StreamCatalog(info, entry.url)
+                if (!resolvedCatalog.hasVideo && resolvedCatalog.audioTracks.isEmpty()) {
+                    throw org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException(
+                        "No playable streams in extractor response"
+                    )
+                }
+                catalog = resolvedCatalog
                 usedFallback = false
                 LocalStore.addToHistory(appContext, entry.toVideoEntry())
                 RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
@@ -1532,10 +1540,19 @@ object PlaybackCenter {
                 if (ageGated && !entry.url.startsWith("file://") && !usedSignedInRetry) {
                     usedSignedInRetry = true
                     val vid = DownloadCenter.videoIdOf(entry.url)
-                    val directCatalog = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-                            ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
-                    }
+                    val directJson = (if (!usedHttpRetry) {
+                        kotlinx.coroutines.withContext(Dispatchers.IO) {
+                            YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+                        }
+                    } else null) ?: if (YouTubeAuth.isLoggedIn()) {
+                        com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                            ?.let {
+                                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                    YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid)
+                                }
+                            }
+                    } else null
+                    val directCatalog = directJson?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
                     if (directCatalog != null && currentEntry?.url == entry.url) {
                         catalog = directCatalog
                         LocalStore.addToHistory(appContext, entry.toVideoEntry())
@@ -1756,6 +1773,18 @@ object PlaybackCenter {
                 notifyFailure()
             }
             return
+        }
+        if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+            !usedHttpRetry && currentEntry?.url?.startsWith("file://") == false
+        ) {
+            usedHttpRetry = true
+            val entry = currentEntry
+            if (entry != null) {
+                YtRepository.invalidateStreamCache(entry.url)
+                YouTubePlayerUnlock.forceUnlockForUrl(entry.url)
+                resolveCurrent()
+                return
+            }
         }
         if (dashActive) {
             dashBlocked = true

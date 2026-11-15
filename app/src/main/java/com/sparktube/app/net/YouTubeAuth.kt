@@ -142,10 +142,10 @@ object YouTubeAuth {
         val lower = url.lowercase(Locale.US)
         if (!lower.contains("youtube.com") && !lower.contains("youtu.be")) return
 
-        val origin = if (lower.contains("music.youtube.com")) {
-            "https://music.youtube.com"
-        } else {
-            "https://www.youtube.com"
+        val origin = when {
+            lower.contains("music.youtube.com") -> "https://music.youtube.com"
+            lower.contains("m.youtube.com") -> "https://m.youtube.com"
+            else -> "https://www.youtube.com"
         }
 
         val combinedExisting = existingCookies.joinToString("; ")
@@ -161,6 +161,7 @@ object YouTubeAuth {
             builder.header("X-Origin", origin)
             builder.header("Origin", origin)
             builder.header("X-Goog-AuthUser", "0")
+            builder.header("X-Goog-Api-Format-Version", "1")
         }
     }
 
@@ -201,6 +202,14 @@ object YouTubeAuth {
             }
             clientParam.startsWith("TVHTML5") -> {
                 headers["User-Agent"] = UA_TV_EMBED
+                headers["Origin"] = "https://www.youtube.com"
+                headers["Referer"] = "https://www.youtube.com/"
+                if (isLoggedIn()) {
+                    headers["Cookie"] = buildCookieHeader()
+                }
+            }
+            clientParam == "WEB" -> {
+                headers["User-Agent"] = UA_WEB_CHROME
                 headers["Origin"] = "https://www.youtube.com"
                 headers["Referer"] = "https://www.youtube.com/"
                 if (isLoggedIn()) {
