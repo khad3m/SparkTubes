@@ -16,6 +16,8 @@ object AppPrefs {
     private const val KEY_SMART_STREAMING = "smart_streaming"
     private const val KEY_MUSIC_AUDIO_QUALITY = "music_audio_quality"
     private const val KEY_MUSIC_AUTOPLAY_NEXT = "music_autoplay_next"
+    private const val KEY_MUSIC_REPEAT_MODE = "music_repeat_mode"
+    private const val KEY_MUSIC_SHUFFLE = "music_shuffle"
     private const val KEY_ANIMATIONS = "animations"
     private const val KEY_AUTO_CHECK_UPDATES = "auto_check_updates"
     private const val KEY_SPONSOR_BLOCK = "sponsor_block"
@@ -220,6 +222,20 @@ object AppPrefs {
         get() = sp.getBoolean(KEY_MUSIC_AUTOPLAY_NEXT, true)
         set(value) {
             sp.edit().putBoolean(KEY_MUSIC_AUTOPLAY_NEXT, value).apply()
+        }
+
+    /** Music repeat mode: 0 = off, 1 = repeat all, 2 = repeat one. */
+    var musicRepeatMode: Int
+        get() = sp.getInt(KEY_MUSIC_REPEAT_MODE, 0).coerceIn(0, 2)
+        set(value) {
+            sp.edit().putInt(KEY_MUSIC_REPEAT_MODE, value.coerceIn(0, 2)).apply()
+        }
+
+    /** Music queue shuffle (off by default). */
+    var musicShuffle: Boolean
+        get() = sp.getBoolean(KEY_MUSIC_SHUFFLE, false)
+        set(value) {
+            sp.edit().putBoolean(KEY_MUSIC_SHUFFLE, value).apply()
         }
 
     var animations: Boolean
