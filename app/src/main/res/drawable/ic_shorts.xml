@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <!-- Shorts / Reels: two stacked rounded frames with a play bolt -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M17.77,10.32l-1.2,-0.5L18,9.06c1.84,-0.96 2.53,-3.23 1.56,-5.06 -0.96,-1.83 -3.24,-2.53 -5.07,-1.56L6,6.94c-0.9,0.47 -1.61,1.27 -1.95,2.26 -0.51,1.51 -0.1,3.13 0.96,4.22l1.42,0.59L4.83,14.94c-1.84,0.96 -2.53,3.23 -1.56,5.06 0.97,1.83 3.24,2.53 5.07,1.56l8.5,-4.5c0.9,-0.47 1.61,-1.27 1.95,-2.26 0.51,-1.51 0.1,-3.13 -1.02,-4.48zM10,14.65v-5.3L15,12l-5,2.65z"/>
+</vector>

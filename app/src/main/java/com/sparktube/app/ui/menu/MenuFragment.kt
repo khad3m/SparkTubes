@@ -13,7 +13,6 @@ import com.sparktube.app.data.Countries
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.FragmentMenuBinding
 import com.sparktube.app.net.YouTubeAuth
-import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.ui.music.Motion
 import com.sparktube.app.util.AppPrefs
 import kotlinx.coroutines.launch
@@ -36,7 +35,6 @@ class MenuFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         Motion.pressable(binding.profileHeroCard, 0.98f)
-        Motion.pressable(binding.rowGoogleAccount, 0.97f)
         Motion.pressable(binding.rowCountry, 0.96f)
         Motion.pressable(binding.rowSettings, 0.96f)
         Motion.pressable(binding.rowVideoSettings, 0.96f)
@@ -44,9 +42,6 @@ class MenuFragment : Fragment() {
 
         binding.profileHeroCard.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)
-        }
-        binding.rowGoogleAccount.setOnClickListener {
-            handleGoogleAccountClick()
         }
         binding.rowCountry.setOnClickListener { showCountryPicker() }
         binding.rowSettings.setOnClickListener {
@@ -64,54 +59,14 @@ class MenuFragment : Fragment() {
         super.onResume()
         val country = AppPrefs.countryOrDefault
         binding.countryValue.text = "${Countries.flagOf(country)} ${Countries.nameOf(country)}"
-        bindGoogleAccountState()
-    }
-
-    private fun bindGoogleAccountState() {
+        // Google account management lives in Settings → "YouTube / Google Account";
+        // the menu keeps only the profile card (v1.7.0 removed the duplicate card here).
         val loggedIn = YouTubeAuth.isLoggedIn()
-        if (loggedIn) {
-            binding.googleAccountTitle.text = getString(R.string.youtube_account_connected)
-            binding.googleAccountSubtitle.text = getString(R.string.youtube_account_connected_sub)
-            binding.googleAccountBadge.text = getString(R.string.youtube_account_active_badge)
-            binding.googleAccountBadge.setBackgroundResource(R.drawable.bg_pill_green)
-            binding.profileSubtitle.text = "Premium Glass Edition · Google Auth + VR Engine Active"
+        binding.profileSubtitle.text = if (loggedIn) {
+            getString(R.string.youtube_account_connected_sub)
         } else {
-            binding.googleAccountTitle.text = getString(R.string.youtube_account_title)
-            binding.googleAccountSubtitle.text = getString(R.string.youtube_account_disconnected_sub)
-            binding.googleAccountBadge.text = getString(R.string.youtube_sign_in_short)
-            binding.googleAccountBadge.setBackgroundResource(R.drawable.bg_action_pill_active)
-            binding.profileSubtitle.text = getString(R.string.profile_subtitle)
+            getString(R.string.profile_subtitle)
         }
-    }
-
-    private fun handleGoogleAccountClick() {
-        if (!YouTubeAuth.isLoggedIn()) {
-            YouTubeLoginActivity.start(requireContext())
-            return
-        }
-        val options = arrayOf(
-            getString(R.string.youtube_account_relogin),
-            getString(R.string.youtube_account_sign_out)
-        )
-        AlertDialog.Builder(requireContext())
-            .setTitle(R.string.youtube_account_connected)
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> YouTubeLoginActivity.start(requireContext())
-                    1 -> {
-                        YouTubeAuth.clearSession()
-                        YtRepository.clearCache()
-                        bindGoogleAccountState()
-                        Toast.makeText(
-                            requireContext(),
-                            R.string.youtube_signed_out_toast,
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
     }
 
     private fun showCountryPicker() {

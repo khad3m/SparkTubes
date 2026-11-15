@@ -68,7 +68,7 @@ class MusicListActivity : AppCompatActivity() {
             onClick = { model ->
                 val index = entries.indexOfFirst { it.url == model.url }
                 if (index >= 0) {
-                    PlaybackCenter.playMusicQueue(entries, index, allowRadio = false)
+                    PlaybackCenter.playMusicQueue(entries, index, allowRadio = true)
                     NowPlayingActivity.start(this)
                 }
             },
@@ -96,7 +96,7 @@ class MusicListActivity : AppCompatActivity() {
                 val targetUrl = "file://$path"
                 val index = entries.indexOfFirst { it.url == targetUrl }
                 if (index >= 0) {
-                    PlaybackCenter.playMusicQueue(entries, index, allowRadio = false)
+                    PlaybackCenter.playMusicQueue(entries, index, allowRadio = true)
                     NowPlayingActivity.start(this)
                 } else {
                     PlaybackCenter.playDownload(record)
@@ -120,7 +120,7 @@ class MusicListActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
         binding.playAllButton.setOnClickListener {
             if (entries.isNotEmpty()) {
-                PlaybackCenter.playMusicQueue(entries, 0, allowRadio = false)
+                PlaybackCenter.playMusicQueue(entries, 0, allowRadio = true)
                 NowPlayingActivity.start(this)
             }
         }

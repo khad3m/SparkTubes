@@ -1,12 +1,15 @@
 package com.sparktube.app
 
 import android.app.Application
+import android.content.ComponentCallbacks2
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.imageLoader
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.CrashReporter
+import com.sparktube.app.util.DeviceTuning
 import com.sparktube.app.util.Themes
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.localization.ContentCountry
@@ -28,6 +31,7 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
         CrashReporter.install(this)
 
         AppPrefs.init(this)
+        DeviceTuning.init(this)
         PlaybackCenter.init(this)
         Themes.applyDefaultNightMode()
 
@@ -45,8 +49,27 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
         // to listen for anymore.
     }
 
+    /**
+     * Low-RAM aware image loader: smaller memory cache and RGB_565 bitmaps on
+     * constrained devices so thumbnail lists never push the app near its heap.
+     */
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
             .crossfade(true)
+            .memoryCache {
+                coil.memory.MemoryCache.Builder(this)
+                    .maxSizePercent(DeviceTuning.imageMemoryCachePercent(this).toDouble())
+                    .build()
+            }
+            .bitmapConfig(DeviceTuning.imageBitmapConfig(this))
             .build()
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Release thumbnail bitmaps as soon as the system asks: this is what
+        // keeps background memory low on 2 GB devices.
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            imageLoader.memoryCache?.trimMemory(level)
+        }
+    }
 }

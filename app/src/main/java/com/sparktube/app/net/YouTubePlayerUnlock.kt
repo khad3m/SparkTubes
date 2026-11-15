@@ -92,11 +92,17 @@ object YouTubePlayerUnlock {
             }
 
             val loggedIn = YouTubeAuth.isLoggedIn()
-            // Age-restricted videos need a client that accepts the signed-in session
-            // (TV / embedded clients). ANDROID_VR / IOS never accept cookies, so they
-            // only help for videos that are merely bot-checked, not age-gated.
+            // Age-restricted videos are unlocked with the user's real session:
+            // the desktop WEB client + saved Google cookies + SAPISIDHASH header
+            // (exactly what the signed-in browser sends). Every anonymous client
+            // (VR / IOS / TV / embedded) now gets "Sign in to confirm your age",
+            // so when signed in the WEB+cookies request must come FIRST; the TV /
+            // embedded clients below stay as backup for bot-checked videos.
+            // ANDROID_VR / IOS never accept cookies, so they only help for videos
+            // that are merely bot-checked, not age-gated.
             val candidates = if (loggedIn) {
                 listOf(
+                    FallbackSpec("WEB", useCookies = true),
                     FallbackSpec("TVHTML5", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
                     FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
@@ -122,9 +128,9 @@ object YouTubePlayerUnlock {
                 Log.d(
                     TAG,
                     "$videoId ${spec.kind} cookies=${spec.useCookies} status=${st?.optString("status")} " +
-                        "reason=${st?.optString("reason")} playable=${isPlayableWithDirectUrls(fb)}"
+                        "reason=${st?.optString("reason")} playable=${isPlayableWithStreamSources(fb)}"
                 )
-                if (isPlayableWithDirectUrls(fb)) {
+                if (isPlayableWithStreamSources(fb)) {
                     bestFallback = fb
                     break
                 }
@@ -175,6 +181,42 @@ object YouTubePlayerUnlock {
             }
         }
         return directVideo > 0 && directAudio > 0
+    }
+
+    /**
+     * A response counts as playable when it has OK status plus at least one
+     * video AND one audio source — direct `url` OR `signatureCipher` (the
+     * signed-in WEB client returns ciphered URLs, which NewPipeExtractor
+     * de-obfuscates with its player-JS engine, so cipher counts as usable).
+     */
+    private fun isPlayableWithStreamSources(root: JSONObject): Boolean {
+        val status = root.optJSONObject("playabilityStatus")?.optString("status").orEmpty()
+        if (!status.equals("OK", ignoreCase = true)) return false
+        val sd = root.optJSONObject("streamingData") ?: return false
+        var video = 0
+        var audio = 0
+
+        val adaptive = sd.optJSONArray("adaptiveFormats")
+        if (adaptive != null) {
+            for (i in 0 until adaptive.length()) {
+                val fmt = adaptive.optJSONObject(i) ?: continue
+                if (!hasStreamSource(fmt)) continue
+                val mime = fmt.optString("mimeType", "")
+                if (mime.startsWith("video/")) video++
+                else if (mime.startsWith("audio/")) audio++
+            }
+        }
+        val muxed = sd.optJSONArray("formats")
+        if (muxed != null) {
+            for (i in 0 until muxed.length()) {
+                val fmt = muxed.optJSONObject(i) ?: continue
+                if (hasStreamSource(fmt)) {
+                    video++
+                    audio++
+                }
+            }
+        }
+        return video > 0 && audio > 0
     }
 
     /** A format is usable if it has a direct URL or a (decryptable) signature cipher. */
@@ -255,9 +297,13 @@ object YouTubePlayerUnlock {
                 reqBuilder.header("X-YouTube-Client-Version", "1.9")
             }
             else -> {
+                // WEB (also used by the explicit "WEB" spec): the signed-in
+                // browser client. Session cookies + SAPISIDHASH arrive via
+                // applyYouTubeAuthToRequest below — this is what unlocks
+                // age-restricted videos for logged-in users.
                 reqBuilder.header("User-Agent", OkHttpDownloader.USER_AGENT)
                 reqBuilder.header("X-YouTube-Client-Name", "1")
-                reqBuilder.header("X-YouTube-Client-Version", "2.20250101.01.00")
+                reqBuilder.header("X-YouTube-Client-Version", "2.20250312.01.00")
                 reqBuilder.header("Origin", "https://www.youtube.com")
                 reqBuilder.header("Referer", "https://www.youtube.com/watch?v=$videoId")
             }

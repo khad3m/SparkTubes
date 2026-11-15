@@ -164,7 +164,7 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Upper-Left Dual Mini Buttons: [Music/Audio] & [Video] -->
+    <!-- Upper-Left Dual Mini Buttons: [Music/Audio] & [Video] — icon-only (v1.7.0) -->
     <LinearLayout
         android:id="@+id/topLeftModeSwitcher"
         android:layout_width="wrap_content"
@@ -181,67 +181,41 @@
 
         <LinearLayout
             android:id="@+id/miniMusicBtn"
-            android:layout_width="wrap_content"
+            android:layout_width="34dp"
             android:layout_height="match_parent"
             android:background="@drawable/bg_mode_switch_inactive"
             android:clickable="true"
             android:contentDescription="@string/switch_to_audio"
             android:focusable="true"
-            android:gravity="center"
-            android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp">
+            android:gravity="center">
 
             <ImageView
                 android:id="@+id/miniMusicIcon"
-                android:layout_width="15dp"
-                android:layout_height="15dp"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_headset"
                 app:tint="#CCFFFFFF" />
-
-            <TextView
-                android:id="@+id/miniMusicLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="5dp"
-                android:text="@string/switch_to_audio"
-                android:textColor="#CCFFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/miniVideoBtn"
-            android:layout_width="wrap_content"
+            android:layout_width="34dp"
             android:layout_height="match_parent"
             android:layout_marginStart="2dp"
             android:background="@drawable/bg_mode_switch_active"
             android:clickable="true"
             android:contentDescription="@string/switch_to_video"
             android:focusable="true"
-            android:gravity="center"
-            android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp">
+            android:gravity="center">
 
             <ImageView
                 android:id="@+id/miniVideoIcon"
-                android:layout_width="15dp"
-                android:layout_height="15dp"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_video_cam"
                 app:tint="@color/white" />
-
-            <TextView
-                android:id="@+id/miniVideoLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="5dp"
-                android:text="@string/switch_to_video"
-                android:textColor="@color/white"
-                android:textSize="11sp"
-                android:textStyle="bold" />
         </LinearLayout>
     </LinearLayout>
 
@@ -307,7 +281,21 @@
         android:padding="12dp"
         android:contentDescription="@string/action_scale_mode"
         android:src="@drawable/ic_tune"
+        android:visibility="gone"
         app:layout_constraintEnd_toStartOf="@id/ccButton"
+        app:layout_constraintTop_toTopOf="parent"
+        app:tint="@color/white" />
+
+    <!-- Playback speed icon (v1.7.0): opens the 0.5x – 3.0x speed sheet -->
+    <ImageButton
+        android:id="@+id/speedButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/bg_np_glass_circle_inset"
+        android:contentDescription="@string/settings_speed_section"
+        android:padding="12dp"
+        android:src="@drawable/ic_speed"
+        app:layout_constraintEnd_toStartOf="@id/scaleButton"
         app:layout_constraintTop_toTopOf="parent"
         app:tint="@color/white" />
 
@@ -321,7 +309,7 @@
         android:padding="13dp"
         android:src="@drawable/ic_grid_videos"
         android:visibility="gone"
-        app:layout_constraintEnd_toStartOf="@id/scaleButton"
+        app:layout_constraintEnd_toStartOf="@id/speedButton"
         app:layout_constraintTop_toTopOf="parent"
         app:tint="@color/white" />
 

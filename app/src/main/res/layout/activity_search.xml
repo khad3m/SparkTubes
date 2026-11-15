@@ -107,6 +107,38 @@
             android:textColor="@color/on_surface"
             android:textSize="14sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tabPlaylists"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:paddingTop="9dp"
+            android:paddingBottom="9dp"
+            android:text="@string/search_tab_playlists"
+            android:textColor="@color/on_surface"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <!-- Shorts tab: only shown when "Shorts / Reels videos" is enabled
+             in Settings (v1.7.0). -->
+        <TextView
+            android:id="@+id/tabShorts"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:paddingTop="9dp"
+            android:paddingBottom="9dp"
+            android:text="@string/search_tab_shorts"
+            android:textColor="@color/on_surface"
+            android:textSize="14sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView
@@ -131,7 +163,7 @@
             android:layout_height="match_parent"
             android:clipToPadding="false"
             android:paddingTop="4dp"
-            android:paddingBottom="24dp" />
+            android:paddingBottom="90dp" />
 
         <LinearLayout
             android:id="@+id/errorView"
@@ -159,4 +191,11 @@
             android:textColor="@color/on_surface_variant"
             android:visibility="gone" />
     </FrameLayout>
+
+    <!-- Mini player bar (v1.7.0): shows the current playback above the
+         results list while browsing — the same card that floats above the
+         navbar on the Home screen. -->
+    <include
+        android:id="@+id/miniBarInclude"
+        layout="@layout/mini_player_bar" />
 </LinearLayout>

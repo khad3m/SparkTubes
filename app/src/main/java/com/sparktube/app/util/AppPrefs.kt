@@ -42,6 +42,12 @@ object AppPrefs {
     // Fullscreen video scale mode: fit / crop / stretch.
     private const val KEY_FULLSCREEN_SCALE = "fullscreen_scale"
 
+    // Hardware acceleration: on by default (hardware decoders); user can switch to software decoding.
+    private const val KEY_HARDWARE_ACCELERATION = "hardware_acceleration"
+
+    // Shorts / reels: feed + search tab + navbar shortcut (on by default).
+    private const val KEY_SHORTS_ENABLED = "shorts_enabled"
+
     const val DEFAULT_COUNTRY = "US"
 
     const val THEME_AUTO = "auto"
@@ -226,12 +232,12 @@ object AppPrefs {
 
     /** Music repeat mode: 0 = off, 1 = repeat all, 2 = repeat one. */
     var musicRepeatMode: Int
-        get() = sp.getInt(KEY_MUSIC_REPEAT_MODE, 0).coerceIn(0, 2)
+        get() = sp.getInt(KEY_MUSIC_REPEAT_MODE, 0)
         set(value) {
-            sp.edit().putInt(KEY_MUSIC_REPEAT_MODE, value.coerceIn(0, 2)).apply()
+            sp.edit().putInt(KEY_MUSIC_REPEAT_MODE, value).apply()
         }
 
-    /** Music queue shuffle (off by default). */
+    /** Music queue shuffle toggle. */
     var musicShuffle: Boolean
         get() = sp.getBoolean(KEY_MUSIC_SHUFFLE, false)
         set(value) {
@@ -254,5 +260,19 @@ object AppPrefs {
         get() = sp.getString(KEY_FULLSCREEN_SCALE, SCALE_FIT) ?: SCALE_FIT
         set(value) {
             sp.edit().putString(KEY_FULLSCREEN_SCALE, value).apply()
+        }
+
+    /** Hardware acceleration for playback: true = hardware decoders (default), false = software decoding. */
+    var hardwareAcceleration: Boolean
+        get() = sp.getBoolean(KEY_HARDWARE_ACCELERATION, true)
+        set(value) {
+            sp.edit().putBoolean(KEY_HARDWARE_ACCELERATION, value).apply()
+        }
+
+    /** Shorts / reels videos: search tab + navbar shortcut (on by default). */
+    var shortsEnabled: Boolean
+        get() = sp.getBoolean(KEY_SHORTS_ENABLED, true)
+        set(value) {
+            sp.edit().putBoolean(KEY_SHORTS_ENABLED, value).apply()
         }
 }

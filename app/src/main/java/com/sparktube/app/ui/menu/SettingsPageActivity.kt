@@ -158,6 +158,16 @@ class SettingsPageActivity : AppCompatActivity() {
                 render()
             }
         )
+        // Shorts / Reels: search tab + navbar shortcut (v1.7.0)
+        content.addView(
+            menuRow(
+                getString(R.string.settings_shorts),
+                if (AppPrefs.shortsEnabled) getString(R.string.on) else getString(R.string.off)
+            ) {
+                AppPrefs.shortsEnabled = !AppPrefs.shortsEnabled
+                render()
+            }
+        )
         content.addView(
             menuRow(
                 getString(R.string.settings_download_folder),
@@ -315,7 +325,11 @@ class SettingsPageActivity : AppCompatActivity() {
                     .setTitle("${getString(R.string.update_available_title)} (${latest.tag})")
                     .setMessage(latest.body.ifBlank { latest.name })
                     .setPositiveButton(R.string.update_download) { _, _ ->
-                        UpdateChecker.openDownload(this@SettingsPageActivity, latest)
+                        // In-app download with a live progress bar, then the
+                        // system installer — no browser involved.
+                        com.sparktube.app.ui.common.UpdateDownloadUi.start(
+                            this@SettingsPageActivity, latest, lifecycleScope
+                        )
                     }
                     .setNegativeButton(R.string.later, null)
                     .show()
@@ -641,6 +655,15 @@ class SettingsPageActivity : AppCompatActivity() {
                 if (AppPrefs.smartStreaming) getString(R.string.on) else getString(R.string.off)
             ) {
                 AppPrefs.smartStreaming = !AppPrefs.smartStreaming
+                render()
+            }
+        )
+        content.addView(
+            menuRow(
+                getString(R.string.settings_hw_acceleration),
+                if (AppPrefs.hardwareAcceleration) getString(R.string.on) else getString(R.string.off)
+            ) {
+                AppPrefs.hardwareAcceleration = !AppPrefs.hardwareAcceleration
                 render()
             }
         )

@@ -215,6 +215,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.lockButton.isVisible = false
         binding.ccButton.isVisible = false
         binding.scaleButton.isVisible = false
+        binding.speedButton.isVisible = false
         binding.fullscreenVideosGridBtn.isVisible = false
         binding.playerView.setControllerVisibilityListener(
             object : PlayerView.ControllerVisibilityListener {
@@ -334,6 +335,10 @@ class PlayerActivity : AppCompatActivity() {
         binding.fullscreenButton.setOnClickListener { toggleFullscreen() }
 
         binding.scaleButton.setOnClickListener { cycleScaleMode() }
+        binding.speedButton.setOnClickListener { v ->
+            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            showSpeedSheet()
+        }
         applyScaleMode()
 
         gestures = PlayerGestures(
@@ -503,9 +508,7 @@ class PlayerActivity : AppCompatActivity() {
             if (!isAudio) R.drawable.bg_mode_switch_active else R.drawable.bg_mode_switch_inactive
         )
         binding.miniMusicIcon.setColorFilter(if (isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
-        binding.miniMusicLabel.setTextColor(if (isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
         binding.miniVideoIcon.setColorFilter(if (!isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
-        binding.miniVideoLabel.setTextColor(if (!isAudio) Color.WHITE else 0xCCFFFFFF.toInt())
     }
 
     private fun hookGearMenu() {
@@ -520,6 +523,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.lockButton.isVisible = visible
         binding.ccButton.isVisible = visible
         binding.scaleButton.isVisible = visible && landscape
+        binding.speedButton.isVisible = visible
         binding.fullscreenVideosGridBtn.isVisible = visible && landscape
         binding.topLeftModeSwitcher.isVisible = !isInPictureInPictureMode && !isScreenLocked && (!landscape || controllerVisible)
     }
@@ -742,6 +746,7 @@ class PlayerActivity : AppCompatActivity() {
             binding.lockButton.isVisible = false
             binding.ccButton.isVisible = false
             binding.scaleButton.isVisible = false
+            binding.speedButton.isVisible = false
             binding.fullscreenVideosGridBtn.isVisible = false
             binding.fullscreenGridOverlay.isVisible = false
             binding.unlockScreenButton.isVisible = false
@@ -1663,13 +1668,14 @@ class PlayerActivity : AppCompatActivity() {
         val root = sheetRoot()
         root.addView(sheetTitle(getString(R.string.settings_speed_section)))
 
-        val speeds = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+        // 0.5x – 3.0x range (v1.7.0), with the current speed highlighted.
+        val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
         val currentSpeed = PlaybackCenter.playbackSpeed
         speeds.forEach { s ->
             root.addView(
                 sheetRow(
                     if (s == 1.0f) getString(R.string.speed_normal) else "${s}x",
-                    s == currentSpeed
+                    kotlin.math.abs(s - currentSpeed) < 0.01f
                 ) {
                     PlaybackCenter.setSpeed(s)
                     PlaybackCenter.catalogForCurrentEntry()?.let {

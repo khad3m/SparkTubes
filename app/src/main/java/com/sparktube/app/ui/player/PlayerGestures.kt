@@ -22,9 +22,8 @@ import kotlin.math.roundToInt
 /**
  * Touch gestures on the video surface:
  *  - Screen Lock guard: when `isLocked()` is true, blocks all swipes/double-taps/speed-holds and triggers `onLockedTap`
- *  - Vertical swipe on LEFT  -> screen brightness
- *  - Vertical swipe on RIGHT -> media volume
- *  - Portrait middle swipe down -> minimize to mini player
+ *  - Fullscreen (landscape) only: vertical swipe LEFT -> brightness, RIGHT -> media volume
+ *  - Portrait: vertical swipe down in the middle -> minimize to mini player (no volume/brightness HUD, v1.7.0)
  *  - Double-tap LEFT / RIGHT -> seek -10s / +10s; keep tapping within ~0.8s to chain (+20s, +30s ...)
  *  - Horizontal swipe -> scrub (shows target time; seeks on release)
  *  - Touches starting at the very screen edge are ignored (system back gesture zone)
@@ -243,11 +242,12 @@ class PlayerGestures(
     private fun decide(v: View, x: Float, dy: Float): Mode {
         val w = v.width.toFloat()
         if (isLandscape()) {
+            // Fullscreen (landscape): YouTube-style brightness / volume zones.
             return if (x < w / 2f) Mode.BRIGHTNESS else Mode.VOLUME
         }
+        // Portrait (not fullscreen): no volume/brightness controls — a swipe
+        // down in the middle simply minimizes to the mini player (v1.7.0).
         return when {
-            x < w * 0.32f -> Mode.BRIGHTNESS
-            x > w * 0.68f -> Mode.VOLUME
             dy > 0 -> Mode.MINIMIZE
             else -> Mode.IGNORE
         }

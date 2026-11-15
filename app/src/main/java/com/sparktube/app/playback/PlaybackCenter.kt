@@ -21,7 +21,9 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
@@ -43,6 +45,7 @@ import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.net.ParallelRangeDataSource
 import com.sparktube.app.ui.widget.SparkTubeWidgetProvider
 import com.sparktube.app.util.AppPrefs
+import com.sparktube.app.util.DeviceTuning
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -477,19 +480,19 @@ object PlaybackCenter {
     val player: ExoPlayer
         get() {
             check(this::appContext.isInitialized) { "PlaybackCenter.init() not called" }
-            return playerRef ?: ExoPlayer.Builder(appContext)
+            return playerRef ?: ExoPlayer.Builder(appContext, renderersFactory)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
                 .setSeekBackIncrementMs(10_000L)
                 .setSeekForwardIncrementMs(10_000L)
                 .setLoadControl(
                     DefaultLoadControl.Builder()
                         .setBufferDurationsMs(
-                            /* minBufferMs = */ 45_000,
-                            /* maxBufferMs = */ 120_000,
+                            /* minBufferMs = */ if (lowRam) 20_000 else 45_000,
+                            /* maxBufferMs = */ if (lowRam) 60_000 else 120_000,
                             /* bufferForPlaybackMs = */ 1_000,
                             /* bufferForPlaybackAfterRebufferMs = */ 5_000
                         )
-                        .setBackBuffer(/* backBufferDurationMs = */ 30_000, /* retainBackBufferFromKeyframe = */ true)
+                        .setBackBuffer(/* backBufferDurationMs = */ if (lowRam) 10_000 else 30_000, /* retainBackBufferFromKeyframe = */ true)
                         .build()
                 )
                 .setAudioAttributes(
@@ -506,6 +509,37 @@ object PlaybackCenter {
                     playerRef = built
                     built.addListener(playerListener)
                 }
+        }
+
+    /**
+     * True on low-RAM devices (ActivityManager.isLowRamDevice / tiny heap):
+     * halves the playback buffer, back-buffer and in-memory stream caches.
+     */
+    val lowRam: Boolean
+        get() = this::appContext.isInitialized && DeviceTuning.lowRam(appContext)
+
+    /**
+     * Renderers factory with the "Hardware acceleration" setting applied:
+     * ON (default) → normal hardware MediaCodec selection;
+     * OFF → software decoders (c2.android.* / OMX.google.*) are preferred so
+     * playback still works on devices with broken hardware codecs.
+     */
+    private val renderersFactory: DefaultRenderersFactory
+        get() {
+            val factory = DefaultRenderersFactory(appContext)
+            if (!AppPrefs.hardwareAcceleration) {
+                factory.setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+                    val all = MediaCodecSelector.DEFAULT
+                        .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+                    val software = all.filter {
+                        it.name.startsWith("c2.android") ||
+                            it.name.startsWith("OMX.google") ||
+                            it.name.contains(".sw.")
+                    }
+                    software + (all - software.toSet())
+                }
+            }
+            return factory
         }
 
     private val playerListener = object : Player.Listener {
@@ -1095,7 +1129,8 @@ object PlaybackCenter {
                 durationSec = record.durationSec,
                 isMusic = true
             )
-            playMusicQueue(listOf(audioEntry), 0, allowRadio = false)
+            // Radio auto-builds the music playlist after the local song.
+            playMusicQueue(listOf(audioEntry), 0, allowRadio = true)
             return
         }
 
@@ -1266,6 +1301,7 @@ object PlaybackCenter {
                 applySources(playbackSpeed)
                 notify { it.onItemChanged(currentEntry) }
                 notify { it.onCatalogReady() }
+                maybeFetchRelatedFallback()
                 extendQueueFromRelated()
                 ensureService()
             } catch (e: CancellationException) {
@@ -1317,23 +1353,12 @@ object PlaybackCenter {
                 if (currentEntry?.url != entry.url) return@launch
                 val resolvedCatalog = StreamCatalog(info, entry.url)
                 catalog = resolvedCatalog
-                if (resolvedCatalog.related.isEmpty()) {
-                    // YouTube sometimes returns no "related" block (new layout / signed-in session).
-                    scope.launch {
-                        val fallback = runCatching {
-                            YtRepository.relatedFallback(entry.title, entry.uploader, entry.url)
-                        }.getOrDefault(emptyList())
-                        if (fallback.isNotEmpty() && catalog === resolvedCatalog) {
-                            resolvedCatalog.related = fallback
-                            notify { it.onCatalogReady() }
-                        }
-                    }
-                }
                 LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
                 RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
                 primeMusicUri(entry, resolvedCatalog)
                 notify { it.onItemChanged(currentEntry) }
                 notify { it.onCatalogReady() }
+                maybeFetchRelatedFallback()
                 if (radioMode) {
                     extendRadioFromRelated()
                 }
@@ -1347,6 +1372,31 @@ object PlaybackCenter {
                 }
             } finally {
                 setResolving(false)
+            }
+        }
+    }
+
+    /**
+     * YouTube sometimes returns no "related / up next" block (new layout,
+     * signed-in session, shorts-heavy pages). When that happens, fetch a
+     * search-based on-topic replacement and refresh the UI — used by BOTH the
+     * video watch path and the audio/radio path so the up-next list never
+     * depends on toggling audio/video mode.
+     */
+    private fun maybeFetchRelatedFallback() {
+        val entry = currentEntry ?: return
+        val resolved = catalogForCurrentEntry() ?: return
+        if (resolved.related.isNotEmpty() || entry.url.startsWith("file://")) return
+        scope.launch {
+            val fallback = runCatching {
+                YtRepository.relatedFallback(entry.title, entry.uploader, entry.url)
+            }.getOrDefault(emptyList())
+            if (fallback.isNotEmpty() && catalog === resolved && currentEntry?.url == entry.url) {
+                resolved.related = fallback
+                notify { it.onCatalogReady() }
+                if (radioMode && mode == Mode.AUDIO) {
+                    extendRadioFromRelated()
+                }
             }
         }
     }
@@ -1777,7 +1827,7 @@ object PlaybackCenter {
             }
         }
         val key = "music-${musicItemId.incrementAndGet()}"
-        if (pendingMusic.size > 256) pendingMusic.clear()
+        if (pendingMusic.size > (if (lowRam) 96 else 256)) pendingMusic.clear()
         pendingMusic[key] = entry
         return MediaItem.Builder()
             .setMediaId(entry.url)
@@ -1801,7 +1851,7 @@ object PlaybackCenter {
     }
 
     private fun cacheMusicUri(url: String, content: String): Uri {
-        if (musicUriCache.size > 64) musicUriCache.clear()
+        if (musicUriCache.size > (if (lowRam) 24 else 64)) musicUriCache.clear()
         val uri = Uri.parse(content)
         musicUriCache[url] = uri
         return uri

@@ -73,10 +73,18 @@ class MainActivity : AppCompatActivity() {
 
         listOf(binding.navHome, binding.navMusic, binding.navLibrary, binding.navMenu)
             .forEach { com.sparktube.app.ui.music.Motion.pressable(it, 0.92f) }
+        com.sparktube.app.ui.music.Motion.pressable(binding.navShorts, 0.92f)
         binding.navHome.setOnClickListener { select(R.id.navHome) }
         binding.navMusic.setOnClickListener { select(R.id.navMusic) }
         binding.navLibrary.setOnClickListener { select(R.id.navLibrary) }
         binding.navMenu.setOnClickListener { select(R.id.navMenu) }
+        // Shorts / Reels shortcut — present only while the feature is enabled
+        // in Settings → Shorts / Reels videos (v1.7.0).
+        binding.navShorts.setOnClickListener { v ->
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+            com.sparktube.app.ui.shorts.ShortsActivity.start(this)
+        }
+        binding.navShorts.isVisible = AppPrefs.shortsEnabled
 
         binding.miniMedia.clipToOutline = true
         binding.miniMedia.outlineProvider = object : android.view.ViewOutlineProvider() {
@@ -131,7 +139,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyBottomClearance() {
         if (!::binding.isInitialized) return
-        val clearance = bottomClearancePx() + (12 * resources.displayMetrics.density).toInt()
+        // Floor of 100dp: keeps the last menu/settings card visibly above the
+        // floating nav even before the first layout pass lands.
+        val floor = (100 * resources.displayMetrics.density).toInt()
+        val clearance = maxOf(bottomClearancePx() + (12 * resources.displayMetrics.density).toInt(), floor)
         applyClearanceTo(binding.container, clearance)
     }
 
@@ -164,7 +175,9 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("${getString(R.string.update_available_title)} (${latest.tag})")
                     .setMessage(latest.body.ifBlank { latest.name })
                     .setPositiveButton(R.string.update_download) { _, _ ->
-                        UpdateChecker.openDownload(this@MainActivity, latest)
+                        // In-app download with a live progress bar, then the
+                        // system installer — no browser involved.
+                        com.sparktube.app.ui.common.UpdateDownloadUi.start(this@MainActivity, latest, lifecycleScope)
                     }
                     .setNegativeButton(R.string.later, null)
                     .show()
@@ -180,6 +193,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (Themes.recreateIfNeeded(this)) return
+        // The Shorts toggle may have changed in Settings while we were away.
+        binding.navShorts.isVisible = AppPrefs.shortsEnabled
         PlaybackCenter.addListener(playbackListener)
         bindMiniPlayer()
     }

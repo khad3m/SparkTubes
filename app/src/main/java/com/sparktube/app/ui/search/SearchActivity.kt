@@ -7,6 +7,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
@@ -20,6 +21,7 @@ import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.ActivitySearchBinding
 import com.sparktube.app.playback.PlaybackCenter
+import com.sparktube.app.playback.toQueueEntry
 import com.sparktube.app.ui.channel.ChannelActivity
 import com.sparktube.app.ui.common.ChannelRowAdapter
 import com.sparktube.app.ui.common.MusicRowAdapter
@@ -33,6 +35,7 @@ import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
 import com.sparktube.app.ui.music.NowPlayingActivity
 import com.sparktube.app.ui.player.PlayerActivity
+import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Formatters
 import com.sparktube.app.util.Themes
 import kotlinx.coroutines.CancellationException
@@ -55,19 +58,22 @@ import org.schabi.newpipe.extractor.Page
 class SearchActivity : AppCompatActivity() {
 
     /** Result tab shown on the video search screen. */
-    private enum class SearchTab { VIDEOS, CHANNELS }
+    private enum class SearchTab { VIDEOS, CHANNELS, PLAYLISTS, SHORTS }
 
     private lateinit var binding: ActivitySearchBinding
     private var musicMode: Boolean = false
     private var prefillQuery: String? = null
+    private lateinit var miniBar: com.sparktube.app.ui.common.MiniPlayerBar
 
     private lateinit var videoAdapter: VideoAdapter
     private lateinit var channelAdapter: ChannelRowAdapter
     private lateinit var musicAdapter: MusicRowAdapter
+    private lateinit var playlistAdapter: com.sparktube.app.ui.common.RemotePlaylistAdapter
     private lateinit var suggestionAdapter: SuggestionAdapter
 
     private val items = mutableListOf<VideoUiModel>()
     private val channelItems = mutableListOf<ChannelEntry>()
+    private val playlistItems = mutableListOf<com.sparktube.app.ui.common.RemotePlaylistModel>()
     private var page: Page? = null
     private var query: String = ""
     private var isLoading = false
@@ -100,6 +106,10 @@ class SearchActivity : AppCompatActivity() {
 
             binding.tabVideos.setOnClickListener { switchTab(SearchTab.VIDEOS) }
             binding.tabChannels.setOnClickListener { switchTab(SearchTab.CHANNELS) }
+            binding.tabPlaylists.setOnClickListener { switchTab(SearchTab.PLAYLISTS) }
+            binding.tabShorts.setOnClickListener { switchTab(SearchTab.SHORTS) }
+            // Shorts / Reels search tab follows the Settings toggle (v1.7.0).
+            binding.tabShorts.isVisible = AppPrefs.shortsEnabled
             binding.filterButton.setOnClickListener { showFilterPicker() }
         }
 
@@ -113,6 +123,9 @@ class SearchActivity : AppCompatActivity() {
         )
         musicAdapter = MusicRowAdapter(onClick = { model ->
             playMusic(model)
+        })
+        playlistAdapter = com.sparktube.app.ui.common.RemotePlaylistAdapter(onClick = { playlist ->
+            openRemotePlaylist(playlist)
         })
         suggestionAdapter = SuggestionAdapter(
             onClick = { suggestion ->
@@ -152,6 +165,12 @@ class SearchActivity : AppCompatActivity() {
             binding.searchInput.setText("")
             showHistoryRows()
             binding.searchInput.requestFocus()
+        }
+
+        // Floating mini player above the results (v1.7.0): appears whenever
+        // something is playing, same as the bar above the home-screen navbar.
+        miniBar = com.sparktube.app.ui.common.MiniPlayerBar(binding.miniBarInclude.root) {
+            com.sparktube.app.ui.player.PlayerActivity.startResume(this)
         }
 
         binding.searchInput.setOnEditorActionListener { _, actionId, _ ->
@@ -203,6 +222,12 @@ class SearchActivity : AppCompatActivity() {
         super.onResume()
         // A theme / accent change while we were in the background.
         Themes.recreateIfNeeded(this)
+        miniBar.start()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        miniBar.stop()
     }
 
     // ----- Tabs + date filter -----
@@ -212,8 +237,10 @@ class SearchActivity : AppCompatActivity() {
         tab = newTab
         binding.tabVideos.isSelected = tab == SearchTab.VIDEOS
         binding.tabChannels.isSelected = tab == SearchTab.CHANNELS
-        // Upload-date filters only make sense for videos.
-        binding.filterButton.isVisible = tab == SearchTab.VIDEOS
+        binding.tabPlaylists.isSelected = tab == SearchTab.PLAYLISTS
+        binding.tabShorts.isSelected = tab == SearchTab.SHORTS
+        // Upload-date filters only make sense for videos / shorts.
+        binding.filterButton.isVisible = tab == SearchTab.VIDEOS || tab == SearchTab.SHORTS
         // Re-run the search for the new tab when there is a query; a
         // half-finished old-tab search is cancelled by doSearch's new job.
         if (query.isNotBlank()) {
@@ -268,6 +295,7 @@ class SearchActivity : AppCompatActivity() {
         binding.list.adapter = when {
             musicMode -> musicAdapter
             tab == SearchTab.CHANNELS -> channelAdapter
+            tab == SearchTab.PLAYLISTS -> playlistAdapter
             else -> videoAdapter
         }
     }
@@ -282,7 +310,53 @@ class SearchActivity : AppCompatActivity() {
     private fun itemCount(): Int = when {
         musicMode -> musicAdapter.itemCount
         tab == SearchTab.CHANNELS -> channelAdapter.itemCount
+        tab == SearchTab.PLAYLISTS -> playlistAdapter.itemCount
         else -> videoAdapter.itemCount
+    }
+
+    /**
+     * Opens a YouTube playlist found in Search: fetches its videos, then lets
+     * the user play them as a video queue (watch page) or as an audio/music
+     * queue (Now Playing with radio auto-continuation).
+     */
+    private fun openRemotePlaylist(playlist: com.sparktube.app.ui.common.RemotePlaylistModel) {
+        Toast.makeText(this, R.string.playlist_loading_toast, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            try {
+                val videos = YtRepository.playlistItems(playlist.url)
+                if (videos.isEmpty()) {
+                    Toast.makeText(this@SearchActivity, R.string.playlist_load_failed, Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val entries = videos.map { it.toQueueEntry(isMusic = false) }
+                val choices = arrayOf(
+                    getString(R.string.playlist_play_video),
+                    getString(R.string.playlist_play_audio)
+                )
+                AlertDialog.Builder(this@SearchActivity)
+                    .setTitle(playlist.title)
+                    .setItems(choices) { dialog, which ->
+                        dialog.dismiss()
+                        when (which) {
+                            0 -> {
+                                PlaybackCenter.playPlaylist(entries, 0)
+                                PlayerActivity.startResume(this@SearchActivity)
+                            }
+                            else -> {
+                                val music = entries.map { it.copy(isMusic = true) }
+                                PlaybackCenter.playMusicQueue(music, 0, allowRadio = true)
+                                NowPlayingActivity.start(this@SearchActivity)
+                            }
+                        }
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(this@SearchActivity, R.string.playlist_load_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun queueSuggestions(text: String) {
@@ -343,21 +417,23 @@ class SearchActivity : AppCompatActivity() {
         page = null
         items.clear()
         channelItems.clear()
+        playlistItems.clear()
         RecommendEngine.logSearch(this, text, musicMode)
         binding.suggestionList.isVisible = false
         videoAdapter.submitList(emptyList())
         channelAdapter.submitList(emptyList())
         musicAdapter.submitList(emptyList())
+        playlistAdapter.submitList(emptyList())
         binding.errorView.isVisible = false
         binding.emptyView.isVisible = false
         searchInFlight = true
 
         // Skeleton rows stand in for the incoming results (video cards for
-        // the Videos tab, compact rows for channels / music).
-        val style = if (!musicMode && tab == SearchTab.VIDEOS) {
-            SkeletonAdapter.STYLE_VIDEO
-        } else {
-            SkeletonAdapter.STYLE_ROW
+        // the Videos tab, compact rows for channels / music / playlists).
+        val style = when {
+            !musicMode && tab == SearchTab.VIDEOS -> SkeletonAdapter.STYLE_VIDEO
+            !musicMode && tab == SearchTab.SHORTS -> SkeletonAdapter.STYLE_VIDEO
+            else -> SkeletonAdapter.STYLE_ROW
         }
         showSkeleton(binding.list, style, count = 8)
 
@@ -380,6 +456,38 @@ class SearchActivity : AppCompatActivity() {
                         applyListAdapter()
                         channelAdapter.submitList(channelItems.toList())
                         finishSearch(channelItems.isNotEmpty(), channelsEmpty)
+                    }
+                    tab == SearchTab.PLAYLISTS -> {
+                        val result = YtRepository.searchPlaylists(query, null)
+                        playlistItems.addAll(
+                            result.items.map {
+                                com.sparktube.app.ui.common.RemotePlaylistModel(
+                                    url = it.url,
+                                    title = it.title,
+                                    uploader = it.uploader,
+                                    thumbnailUrl = it.thumbnailUrl,
+                                    videoCount = it.videoCount
+                                )
+                            }
+                        )
+                        page = result.nextPage
+                        applyListAdapter()
+                        playlistAdapter.submitList(playlistItems.toList())
+                        finishSearch(playlistItems.isNotEmpty(), noResultsEmpty)
+                    }
+                    tab == SearchTab.SHORTS -> {
+                        // Shorts search: short-form clips (≤ 3 minutes) from the
+                        // video search, filtered client-side (v1.7.0).
+                        val result = YtRepository.searchVideos(query, null)
+                        items.clear()
+                        items.addAll(
+                            result.items.map { it.toUiModel() }
+                                .filter { it.durationSec in 1L..180L }
+                        )
+                        page = result.nextPage
+                        applyListAdapter()
+                        videoAdapter.submitList(items.toList())
+                        finishSearch(items.isNotEmpty(), noResultsEmpty)
                     }
                     else -> {
                         val result = YtRepository.searchVideos(query, null)
@@ -448,6 +556,35 @@ class SearchActivity : AppCompatActivity() {
                         channelItems.addAll(result.items.filter { it.url !in known })
                         page = result.nextPage
                         channelAdapter.submitList(channelItems.toList())
+                    }
+                    tab == SearchTab.PLAYLISTS -> {
+                        val result = YtRepository.searchPlaylists(query, nextPage)
+                        val known = playlistItems.map { it.url }.toSet()
+                        playlistItems.addAll(
+                            result.items
+                                .filter { it.url !in known }
+                                .map {
+                                    com.sparktube.app.ui.common.RemotePlaylistModel(
+                                        url = it.url,
+                                        title = it.title,
+                                        uploader = it.uploader,
+                                        thumbnailUrl = it.thumbnailUrl,
+                                        videoCount = it.videoCount
+                                    )
+                                }
+                        )
+                        page = result.nextPage
+                        playlistAdapter.submitList(playlistItems.toList())
+                    }
+                    tab == SearchTab.SHORTS -> {
+                        val result = YtRepository.searchVideos(query, nextPage)
+                        val known = items.map { it.url }.toSet()
+                        items.addAll(
+                            result.items.map { it.toUiModel() }
+                                .filter { it.url !in known && it.durationSec in 1L..180L }
+                        )
+                        page = result.nextPage
+                        videoAdapter.submitList(items.toList())
                     }
                     else -> {
                         val result = YtRepository.searchVideos(query, nextPage)

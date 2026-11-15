@@ -92,6 +92,17 @@ object Formatters {
         return if (views.isEmpty()) "" else "$views views"
     }
 
+    /** Human-readable byte size for update / download progress (1.2 MB, 38.5 MB…). */
+    fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024L * 1024L ->
+            String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024L ->
+            String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024L ->
+            String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
     fun friendlyException(e: Throwable): String {
         return when {
             e is org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException ->

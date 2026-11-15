@@ -154,7 +154,7 @@ class LibraryFragment : Fragment() {
             val targetUrl = "file://$clickedPath"
             val idx = entries.indexOfFirst { it.url == targetUrl }.coerceAtLeast(0)
             if (entries.isNotEmpty()) {
-                PlaybackCenter.playMusicQueue(entries, idx, allowRadio = false)
+                PlaybackCenter.playMusicQueue(entries, idx, allowRadio = true)
                 NowPlayingActivity.start(ctx)
             }
         } else {

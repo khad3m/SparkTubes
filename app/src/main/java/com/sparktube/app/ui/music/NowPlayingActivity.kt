@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.TransitionDrawable
 import android.media.AudioManager
@@ -28,12 +29,15 @@ import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -622,75 +626,207 @@ class NowPlayingActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Premium "Audio Studio" bottom sheet (v1.7.0): glass card with real pill
+     * buttons for Sleep Timer, Hardware EQ presets and Crossfade — the active
+     * choice is highlighted, replacing the old plain action list.
+     */
     private fun showSleepTimerAndEqSheet() {
-        val fadeLabel = if (AppPrefs.crossfadeSeconds > 0) "${AppPrefs.crossfadeSeconds}s" else "Off"
-        ActionSheet.show(
-            this,
-            "Sleep Timer, Crossfade & Audio Studio",
-            "Preset: ${PlaybackCenter.currentEqPresetLabel} · Crossfade: $fadeLabel",
-            listOf(
-                ActionSheet.Item("⇄ Audio Crossfade: 4s (Smooth)", accent = AppPrefs.crossfadeSeconds == 4) {
-                    AppPrefs.crossfadeSeconds = 4
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio Crossfade: 4 seconds", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("⇄ Audio Crossfade: 8s (Club Mix)", accent = AppPrefs.crossfadeSeconds == 8) {
-                    AppPrefs.crossfadeSeconds = 8
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio Crossfade: 8 seconds", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("⇄ Audio Crossfade: Off") {
-                    AppPrefs.crossfadeSeconds = 0
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio Crossfade: Off", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("☾ Sleep Timer: 15 Minutes") {
-                    PlaybackCenter.startSleepTimer(15)
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Sleep timer set for 15 minutes", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("☾ Sleep Timer: 30 Minutes") {
-                    PlaybackCenter.startSleepTimer(30)
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Sleep timer set for 30 minutes", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("☾ Sleep Timer: 60 Minutes") {
-                    PlaybackCenter.startSleepTimer(60)
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Sleep timer set for 60 minutes", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("☾ Turn Off Sleep Timer") {
-                    PlaybackCenter.startSleepTimer(0)
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Sleep timer off", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Flat (Default)", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Flat")) {
-                    PlaybackCenter.applyAudioPreset(0, "Flat")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Flat", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Bass Boost", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Bass")) {
-                    PlaybackCenter.applyAudioPreset(1, "Bass Boost")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Bass Boost", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Vocal & Acoustic", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Vocal")) {
-                    PlaybackCenter.applyAudioPreset(2, "Vocal Studio")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Vocal Studio", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Electronic / Club", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Club")) {
-                    PlaybackCenter.applyAudioPreset(3, "Club Electronic")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Club Electronic", Toast.LENGTH_SHORT).show()
-                },
-                ActionSheet.Item("🎛 EQ: Treble / Clarity", accent = PlaybackCenter.currentEqPresetLabel.startsWith("Treble")) {
-                    PlaybackCenter.applyAudioPreset(4, "Treble Clarity")
-                    updateCenterStatusBadge()
-                    Toast.makeText(this, "Audio EQ: Treble Clarity", Toast.LENGTH_SHORT).show()
+        val sheet = com.google.android.material.bottomsheet.BottomSheetDialog(this)
+        val d = resources.displayMetrics.density
+        fun px(v: Int) = (v * d).toInt()
+
+        val scroll = android.widget.ScrollView(this)
+
+        fun build() {
+            scroll.removeAllViews()
+            scroll.addView(buildAudioStudioContent())
+        }
+        build()
+
+        sheet.setContentView(scroll)
+        sheet.behavior.peekHeight = px(430)
+        sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)?.background =
+            GradientDrawable().apply {
+                setColor(getColor(R.color.glass_sheet))
+                cornerRadii = floatArrayOf(
+                    px(26).toFloat(), px(26).toFloat(), px(26).toFloat(), px(26).toFloat(), 0f, 0f, 0f, 0f
+                )
+                setStroke(1, getColor(R.color.glass_stroke))
+            }
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            try { sheet.window?.setBackgroundBlurRadius(48) } catch (_: Throwable) { }
+        }
+        // A chip tap re-renders the sheet content in place: highlights move live.
+        sheetRefreshCallback = { build() }
+        sheet.setOnDismissListener { sheetRefreshCallback = null }
+        sheet.show()
+    }
+
+    private fun buildAudioStudioContent(): LinearLayout {
+        val d = resources.displayMetrics.density
+        fun px(v: Int) = (v * d).toInt()
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(20), px(20), px(20), px(24))
+        }
+
+        root.addView(TextView(this).apply {
+            text = "Audio Studio"
+            textSize = 18f
+            setTextColor(getColor(R.color.on_surface))
+            setTypeface(null, Typeface.BOLD)
+        })
+        root.addView(TextView(this).apply {
+            text = "Preset: ${PlaybackCenter.currentEqPresetLabel} · Crossfade: ${crossfadeShortLabel()} · Sleep: ${sleepShortLabel()}"
+            textSize = 13f
+            setTextColor(getColor(R.color.on_surface_variant))
+            setPadding(0, px(3), 0, 0)
+        })
+
+        // ----- Sleep Timer section -----
+        root.addView(sectionLabel("SLEEP TIMER"))
+        val sleepRem = PlaybackCenter.sleepTimerRemainingMs
+        val sleepActiveMin = if (sleepRem > 0L) ((sleepRem / 60_000L) + 1).toInt() else 0
+        root.addView(chipRow(listOf(
+            Triple("15 min", sleepActiveMin in 1..15) {
+                PlaybackCenter.startSleepTimer(15)
+                Toast.makeText(this, "Sleep timer set for 15 minutes", Toast.LENGTH_SHORT).show()
+            },
+            Triple("30 min", sleepActiveMin in 16..30) {
+                PlaybackCenter.startSleepTimer(30)
+                Toast.makeText(this, "Sleep timer set for 30 minutes", Toast.LENGTH_SHORT).show()
+            },
+            Triple("60 min", sleepActiveMin in 31..60) {
+                PlaybackCenter.startSleepTimer(60)
+                Toast.makeText(this, "Sleep timer set for 60 minutes", Toast.LENGTH_SHORT).show()
+            }
+        )))
+        root.addView(chipRow(listOf(
+            Triple("☾ Turn off${if (sleepRem > 0L) " (${sleepShortLabel()} left)" else ""}", sleepRem == 0L) {
+                PlaybackCenter.startSleepTimer(0)
+                Toast.makeText(this, "Sleep timer off", Toast.LENGTH_SHORT).show()
+            }
+        )))
+
+        // ----- Equalizer section -----
+        root.addView(sectionLabel("EQUALIZER"))
+        val eqPresets = listOf(
+            Triple("Flat", 0, PlaybackCenter.currentEqPresetLabel.startsWith("Flat")),
+            Triple("Bass Boost", 1, PlaybackCenter.currentEqPresetLabel.startsWith("Bass")),
+            Triple("Vocal", 2, PlaybackCenter.currentEqPresetLabel.startsWith("Vocal")),
+            Triple("Club", 3, PlaybackCenter.currentEqPresetLabel.startsWith("Club")),
+            Triple("Treble", 4, PlaybackCenter.currentEqPresetLabel.startsWith("Treble"))
+        )
+        root.addView(chipRow(eqPresets.take(3).map { (label, index, active) ->
+            Triple("🎛 $label", active) {
+                PlaybackCenter.applyAudioPreset(index, label)
+                Toast.makeText(this, "Audio EQ: $label", Toast.LENGTH_SHORT).show()
+            }
+        }))
+        root.addView(chipRow(eqPresets.drop(3).map { (label, index, active) ->
+            Triple("🎛 $label", active) {
+                PlaybackCenter.applyAudioPreset(index, label)
+                Toast.makeText(this, "Audio EQ: $label", Toast.LENGTH_SHORT).show()
+            }
+        }))
+
+        // ----- Crossfade section -----
+        root.addView(sectionLabel("CROSSFADE"))
+        val fade = AppPrefs.crossfadeSeconds
+        val fadeChoices = listOf(0, 2, 4, 6, 8)
+        var i = 0
+        while (i < fadeChoices.size) {
+            val slice = fadeChoices.subList(i, minOf(i + 3, fadeChoices.size))
+            root.addView(chipRow(slice.map { sec ->
+                Triple(
+                    if (sec == 0) "Off" else "${sec}s",
+                    fade == sec
+                ) {
+                    AppPrefs.crossfadeSeconds = sec
+                    Toast.makeText(
+                        this,
+                        if (sec == 0) "Audio Crossfade: Off" else "Audio Crossfade: $sec seconds",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }))
+            i += 3
+        }
+        return root
+    }
+
+    private fun sectionLabel(text: String): TextView = TextView(this).apply {
+        val d = resources.displayMetrics.density
+        this.text = text
+        textSize = 11f
+        letterSpacing = 0.08f
+        setTextColor(getColor(R.color.music_green))
+        setTypeface(null, Typeface.BOLD)
+        setPadding(0, (10 * d).toInt(), 0, (4 * d).toInt())
+    }
+
+    /** One row of glass pill chips (wrap_content rows of up to 3). */
+    private fun chipRow(
+        chips: List<Triple<String, Boolean, () -> Unit>>
+    ): LinearLayout {
+        val d = resources.displayMetrics.density
+        fun px(v: Int) = (v * d).toInt()
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = px(6) }
+        }
+        chips.forEach { (label, active, action) ->
+            row.addView(
+                TextView(this).apply {
+                    text = label
+                    textSize = 14f
+                    gravity = Gravity.CENTER
+                    minHeight = px(42)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(px(16), px(8), px(16), px(8))
+                    setTextColor(if (active) Color.WHITE else getColor(R.color.on_surface))
+                    setTypeface(null, if (active) Typeface.BOLD else Typeface.NORMAL)
+                    background = GradientDrawable().apply {
+                        cornerRadius = px(21).toFloat()
+                        if (active) {
+                            setColor(getColor(R.color.music_green))
+                        } else {
+                            setColor(Themes.elevatedColor(this@NowPlayingActivity))
+                            setStroke(1, getColor(R.color.glass_stroke))
+                        }
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                    ).also { it.marginEnd = px(6) }
+                    isClickable = true
+                    isFocusable = true
+                    Motion.pressable(this, 0.94f)
+                    setOnClickListener {
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        action()
+                        updateCenterStatusBadge()
+                        sheetRefreshCallback?.invoke()
+                    }
                 }
             )
-        )
+        }
+        return row
+    }
+
+    /** Called after a chip changes a value so the sheet re-renders live. */
+    private var sheetRefreshCallback: (() -> Unit)? = null
+
+    private fun crossfadeShortLabel(): String =
+        if (AppPrefs.crossfadeSeconds > 0) "${AppPrefs.crossfadeSeconds}s" else "Off"
+
+    private fun sleepShortLabel(): String {
+        val rem = PlaybackCenter.sleepTimerRemainingMs
+        return if (rem > 0L) "${(rem / 60_000L) + 1} min" else "Off"
     }
 
     private fun showAppleMusicOptionsDialog() {

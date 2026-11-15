@@ -46,6 +46,20 @@ data class ChannelPageResult(
     val nextPage: Page?
 )
 
+/** YouTube playlist search result row (Search → Playlists tab, v1.7.0). */
+data class RemotePlaylistEntry(
+    val url: String,
+    val title: String,
+    val uploader: String,
+    val thumbnailUrl: String,
+    val videoCount: Long
+)
+
+data class RemotePlaylistPageResult(
+    val items: List<RemotePlaylistEntry>,
+    val nextPage: Page?
+)
+
 data class ChannelUi(
     val url: String,
     val name: String,
@@ -112,12 +126,11 @@ object YtRepository {
     private val service: StreamingService get() = ServiceList.YouTube
 
     private const val STREAM_INFO_CACHE_TTL_MS = 3 * 60 * 1000L
-    private const val STREAM_INFO_CACHE_MAX = 30
     private data class CachedStreamInfo(val info: StreamInfo, val atMs: Long)
     private val streamInfoCache =
         object : LinkedHashMap<String, CachedStreamInfo>(16, 0.75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedStreamInfo>?): Boolean =
-                size > STREAM_INFO_CACHE_MAX
+                size > if (com.sparktube.app.util.DeviceTuning.lowRam()) 10 else 30
         }
 
     private val HOME_KIOSKS = listOf(
@@ -291,6 +304,54 @@ object YtRepository {
                 ""
             )
             executeChannelSearch(handler, page)
+        }
+
+    /**
+     * Playlist search for the Search → Playlists tab (v1.7.0): uses the
+     * PLAYLISTS search filter so users can open full playlists directly
+     * from search results.
+     */
+    suspend fun searchPlaylists(query: String, page: Page? = null): RemotePlaylistPageResult =
+        withContext(Dispatchers.IO) {
+            NewPipe.setPreferredContentCountry(ContentCountry(AppPrefs.countryOrDefault))
+            val handler = service.searchQHFactory.fromQuery(
+                query,
+                listOf(YoutubeSearchQueryHandlerFactory.PLAYLISTS),
+                ""
+            )
+            val raw: List<InfoItem>
+            val nextPage: Page?
+            if (page == null) {
+                val info = SearchInfo.getInfo(service, handler)
+                raw = info.relatedItems
+                nextPage = info.nextPage
+            } else {
+                val result = SearchInfo.getMoreItems(service, handler, page)
+                raw = result.items
+                nextPage = result.nextPage
+            }
+            val items = raw.filterIsInstance<org.schabi.newpipe.extractor.playlist.PlaylistInfoItem>()
+                .filter { !it.url.isNullOrBlank() }
+                .map {
+                    RemotePlaylistEntry(
+                        url = it.url.orEmpty(),
+                        title = it.name.orEmpty(),
+                        uploader = it.uploaderName.orEmpty(),
+                        thumbnailUrl = it.thumbnails.maxByOrNull { t -> t.height }?.url.orEmpty(),
+                        videoCount = it.streamCount
+                    )
+                }
+            RemotePlaylistPageResult(items, nextPage)
+        }
+
+    /**
+     * All videos of a YouTube playlist, live content removed — used to build
+     * the play queue when opening a playlist from Search (video or audio).
+     */
+    suspend fun playlistItems(url: String): List<StreamInfoItem> =
+        withContext(Dispatchers.IO) {
+            val info = org.schabi.newpipe.extractor.playlist.PlaylistInfo.getInfo(service, url)
+            LiveFilter.sanitize(info.relatedItems)
         }
 
     fun clearCache() {
