@@ -2,6 +2,7 @@ package com.sparktube.app.ui.shorts
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -11,6 +12,7 @@ import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -18,6 +20,9 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.Player
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
@@ -25,9 +30,9 @@ import com.google.android.material.imageview.ShapeableImageView
 import com.sparktube.app.R
 import com.sparktube.app.databinding.ActivityShortsBinding
 import com.sparktube.app.data.YtRepository
+import com.sparktube.app.playback.PlaybackCenter
+import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
-import com.sparktube.app.ui.player.PlayerActivity
-import com.sparktube.app.ui.music.Motion
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Themes
 import com.sparktube.app.util.Thumbs
@@ -35,16 +40,28 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
- * Shorts / Reels screen (v1.7.0): a vertical full-page snap feed of
- * short-form videos (≤ 3 minutes). Low-RAM friendly — thumbnails only, the
- * actual playback hands off to the normal watch page. Enabled from
- * Settings → "Shorts / Reels videos"; also surfaced as a Search tab there.
+ * Shorts / Reels player (v1.7.2): a REAL fullscreen portrait feed —
+ *  - every page is a full-screen video that plays inline (auto-plays when
+ *    it snaps into place, powered by the shared PlaybackCenter engine);
+ *  - tap the middle of the video to play/pause;
+ *  - swipe up / down to move to the next / previous short;
+ *  - top-right button toggles Fit (whole video) / Fill (crop) scale mode;
+ *  - loading state on every page while the stream resolves.
+ *
+ * Feed sources are unchanged from v1.7.1: the InnerTube shorts feed with the
+ * country preference and, when Google-signed-in, account personalization.
  */
-class ShortsActivity : AppCompatActivity() {
+class ShortsActivity : AppCompatActivity(), PlaybackCenter.Listener {
 
     private lateinit var binding: ActivityShortsBinding
-    private lateinit var adapter: ShortsAdapter
+    private lateinit var adapter: ShortsPagerAdapter
     private val shorts = mutableListOf<com.sparktube.app.ui.common.VideoUiModel>()
+
+    /** Page whose PlayerView currently owns the shared player surface. */
+    private var attachedPage: ShortsPageView? = null
+
+    /** Position the snap helper last settled on. */
+    private var settledPosition = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Themes.apply(this)
@@ -52,15 +69,42 @@ class ShortsActivity : AppCompatActivity() {
         binding = ActivityShortsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.backButton.setOnClickListener { finish() }
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        enterImmersiveMode()
 
-        adapter = ShortsAdapter(shorts) { model ->
+        binding.backButton.setOnClickListener {
             performHaptic()
-            PlayerActivity.start(this, model)
+            finish()
         }
-        binding.recycler.layoutManager = LinearLayoutManager(this, RecyclerView.VERTICAL, false)
+        binding.fitButton.setOnClickListener {
+            performHaptic()
+            AppPrefs.shortsFillMode = !AppPrefs.shortsFillMode
+            applyFillModeToAttachedPage()
+            updateFitButtonIcon()
+        }
+        updateFitButtonIcon()
+
+        adapter = ShortsPagerAdapter(shorts, onVideoTap = {
+            performHaptic()
+            togglePlayPause()
+        })
+        binding.recycler.layoutManager =
+            LinearLayoutManager(this, RecyclerView.VERTICAL, false)
         binding.recycler.adapter = adapter
         PagerSnapHelper().attachToRecyclerView(binding.recycler)
+        binding.recycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE ||
+                    newState == RecyclerView.SCROLL_STATE_SETTLING
+                ) {
+                    val lm = recyclerView.layoutManager as? LinearLayoutManager ?: return
+                    val position = lm.findFirstCompletelyVisibleItemPosition()
+                    if (position >= 0 && position != settledPosition) {
+                        onPageSettled(position)
+                    }
+                }
+            }
+        })
 
         load()
     }
@@ -68,11 +112,132 @@ class ShortsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (Themes.recreateIfNeeded(this)) return
+        PlaybackCenter.addListener(this)
+        enterImmersiveMode()
+        // Re-attach the surface and resume the current page.
+        if (settledPosition in shorts.indices) {
+            onPageSettled(settledPosition, resume = true)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        PlaybackCenter.removeListener(this)
+        // Leaving the shorts screen pauses playback (same as the YouTube app).
+        if (PlaybackCenter.isPlaying) {
+            runCatching { PlaybackCenter.togglePlayPause() }
+        }
     }
 
     private fun performHaptic() {
         binding.recycler.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
     }
+
+    private fun enterImmersiveMode() {
+        runCatching {
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+            val controller = androidx.core.view.WindowInsetsControllerCompat(window, binding.root)
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    private fun updateFitButtonIcon() {
+        // ic_fullscreen shown in FIT mode (tap = fill/crop); exit icon in FILL mode.
+        binding.fitButton.setImageResource(
+            if (AppPrefs.shortsFillMode) R.drawable.ic_fullscreen_exit else R.drawable.ic_fullscreen
+        )
+    }
+
+    private fun applyFillModeToAttachedPage() {
+        attachedPage?.videoSlot?.resizeMode =
+            if (AppPrefs.shortsFillMode) {
+                AspectRatioFrameLayout.RESIZE_MODE_FILL
+            } else {
+                AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+    }
+
+    /** A new short snapped into view: make it the current playback. */
+    private fun onPageSettled(position: Int, resume: Boolean = false) {
+        if (position !in shorts.indices) return
+        settledPosition = position
+        val page = adapter.pageAt(position) ?: return
+        val model = shorts[position]
+
+        // Move the shared player surface to the newly settled page.
+        if (attachedPage !== page) {
+            attachedPage?.let { PlaybackCenter.detachView(it.videoSlot) }
+            attachedPage = page
+            applyFillModeToAttachedPage()
+            PlaybackCenter.attachView(page.videoSlot)
+        }
+
+        if (PlaybackCenter.currentEntry?.url != model.url) {
+            PlaybackCenter.playVideo(model.toQueueEntry(isMusic = false))
+        } else if (resume) {
+            runCatching { PlaybackCenter.player.play() }
+        }
+        updatePageUi(page)
+    }
+
+    /** Center tap: play/pause (restart the short when it already ended). */
+    private fun togglePlayPause() {
+        if (!PlaybackCenter.hasMedia) return
+        runCatching {
+            val player = PlaybackCenter.player
+            if (player.playbackState == Player.STATE_ENDED) {
+                player.seekTo(0)
+                player.play()
+            } else {
+                PlaybackCenter.togglePlayPause()
+            }
+        }
+        attachedPage?.let { updatePageUi(it) }
+    }
+
+    /** Mirrors PlaybackCenter state onto the visible page (clean UI). */
+    private fun updatePageUi(page: ShortsPageView) {
+        val isCurrent = page === attachedPage
+        if (!isCurrent) return
+        val hasMedia = PlaybackCenter.hasMedia
+        val resolving = PlaybackCenter.isResolving
+        val buffering = hasMedia && runCatching {
+            PlaybackCenter.player.playbackState == Player.STATE_BUFFERING
+        }.getOrDefault(false)
+        val ended = hasMedia && runCatching {
+            PlaybackCenter.player.playbackState == Player.STATE_ENDED
+        }.getOrDefault(false)
+        val playing = PlaybackCenter.isPlaying
+
+        page.loading.isVisible = resolving || buffering
+        // The cover stays until the very first frame is rendered.
+        page.cover.isVisible = !hasMedia || ended || resolving
+        page.centerPlay.isVisible = !playing && !resolving && !buffering
+        page.centerPlay.setImageResource(R.drawable.ic_play_arrow)
+    }
+
+    private fun updateCurrentPageUi() {
+        attachedPage?.let { updatePageUi(it) }
+    }
+
+    // ----- PlaybackCenter.Listener -----
+
+    override fun onItemChanged(entry: com.sparktube.app.playback.QueueEntry?) = updateCurrentPageUi()
+    override fun onResolvingChanged(isResolving: Boolean) = updateCurrentPageUi()
+    override fun onPlaybackStateChanged(isPlaying: Boolean) = updateCurrentPageUi()
+    override fun onCatalogReady() = updateCurrentPageUi()
+    override fun onError(message: String) {
+        updateCurrentPageUi()
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+    override fun onLiveContentBlocked() {
+        updateCurrentPageUi()
+        Toast.makeText(this, R.string.shorts_empty, Toast.LENGTH_SHORT).show()
+    }
+
+    // ----- Feed loading -----
 
     private fun load() {
         binding.emptyView.isVisible = false
@@ -85,6 +250,13 @@ class ShortsActivity : AppCompatActivity() {
                 adapter.notifyDataSetChanged()
                 binding.progress.isVisible = false
                 binding.emptyView.isVisible = shorts.isEmpty()
+                if (shorts.isNotEmpty()) {
+                    binding.recycler.post {
+                        val lm = binding.recycler.layoutManager as? LinearLayoutManager
+                        val pos = lm?.findFirstCompletelyVisibleItemPosition() ?: 0
+                        onPageSettled(if (pos >= 0) pos else 0)
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -148,10 +320,19 @@ class ShortsActivity : AppCompatActivity() {
         return out.values.toList()
     }
 
-    /** One full-page shorts card: cover art, gradient scrim, title + channel. */
-    private class CardView(context: Context) : android.widget.FrameLayout(context) {
+    /**
+     * One full-screen shorts page: video surface + cover placeholder,
+     * loading spinner, center play button, bottom title/channel scrim.
+     */
+    private class ShortsPageView(
+        context: Context,
+        onVideoTap: () -> Unit
+    ) : android.widget.FrameLayout(context) {
 
+        val videoSlot: PlayerView
         val cover: ShapeableImageView
+        val loading: android.widget.ProgressBar
+        val centerPlay: ImageButton
         val title: TextView
         val subtitle: TextView
         val duration: TextView
@@ -160,24 +341,30 @@ class ShortsActivity : AppCompatActivity() {
             val d = context.resources.displayMetrics.density
             fun px(v: Int) = (v * d).toInt()
 
+            videoSlot = PlayerView(context).apply {
+                useController = false
+                layoutParams = LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                setShutterBackgroundColor(Color.BLACK)
+            }
+            addView(videoSlot)
+
             cover = ShapeableImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 layoutParams = LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
                 )
-                shapeAppearanceModel = shapeAppearanceModel.toBuilder()
-                    .setAllCornerSizes(px(20).toFloat())
-                    .build()
             }
             addView(cover)
 
             val scrim = View(context).apply {
                 background = GradientDrawable(
                     GradientDrawable.Orientation.BOTTOM_TOP,
-                    intArrayOf(0xE6000000.toInt(), 0x00000000)
+                    intArrayOf(0xD9000000.toInt(), 0x00000000)
                 )
                 layoutParams = LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, px(190), Gravity.BOTTOM
+                    ViewGroup.LayoutParams.MATCH_PARENT, px(200), Gravity.BOTTOM
                 )
             }
             addView(scrim)
@@ -186,7 +373,7 @@ class ShortsActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM
-                ).also { it.setMargins(px(18), 0, px(18), px(18)) }
+                ).also { it.setMargins(px(18), 0, px(18), px(22)) }
             }
 
             duration = TextView(context).apply {
@@ -198,6 +385,7 @@ class ShortsActivity : AppCompatActivity() {
                     setColor(0x88FF0033.toInt())
                 }
                 setPadding(px(10), px(4), px(10), px(4))
+                visibility = View.GONE
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 )
@@ -228,45 +416,63 @@ class ShortsActivity : AppCompatActivity() {
             info.addView(subtitle)
             addView(info)
 
-            Motion.pressable(this, 0.97f)
+            loading = android.widget.ProgressBar(context).apply {
+                layoutParams = LayoutParams(px(46), px(46), Gravity.CENTER)
+            }
+            addView(loading)
+
+            centerPlay = ImageButton(context).apply {
+                setBackgroundResource(R.drawable.bg_glass_circle_inset)
+                setImageResource(R.drawable.ic_play_arrow)
+                setColorFilter(Color.WHITE)
+                layoutParams = LayoutParams(px(84), px(84), Gravity.CENTER)
+                setOnClickListener { onVideoTap() }
+            }
+            addView(centerPlay)
         }
     }
 
-    private class ShortsAdapter(
+    private class ShortsPagerAdapter(
         private val items: List<com.sparktube.app.ui.common.VideoUiModel>,
-        private val onClick: (com.sparktube.app.ui.common.VideoUiModel) -> Unit
-    ) : RecyclerView.Adapter<ShortsAdapter.VH>() {
+        private val onVideoTap: () -> Unit
+    ) : RecyclerView.Adapter<ShortsPagerAdapter.VH>() {
 
-        class VH(val card: CardView) : RecyclerView.ViewHolder(card)
+        private val pages = arrayOfNulls<ShortsPageView>(items.size)
+
+        class VH(val page: ShortsPageView) : RecyclerView.ViewHolder(page)
+
+        fun pageAt(position: Int): ShortsPageView? =
+            pages.getOrNull(position)
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val d = parent.resources.displayMetrics.density
-            // One card ≈ 72% of the screen height: a real full-page shorts feel
-            // on every device without ever measuring a half-laid-out screen.
-            val pageHeight = (parent.context.resources.displayMetrics.heightPixels * 0.72f).toInt()
-            val card = CardView(parent.context).apply {
+            val page = ShortsPageView(parent.context, onVideoTap).apply {
                 layoutParams = RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, pageHeight
-                ).also {
-                    it.topMargin = (10 * d).toInt()
-                    it.bottomMargin = (10 * d).toInt()
-                }
-                elevation = (6 * d).toFloat()
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                )
             }
-            return VH(card)
+            return VH(page)
         }
 
         override fun getItemCount(): Int = items.size
 
         override fun onBindViewHolder(holder: VH, position: Int) {
             val model = items[position]
-            val card = holder.card
-            Thumbs.load(card.cover, model.thumbnailUrl)
-            card.title.text = model.title
-            card.subtitle.text = model.uploader
-            card.duration.text = model.durationLabel
-            card.contentDescription = "${model.title}, ${model.uploader}"
-            card.setOnClickListener { onClick(model) }
+            val page = holder.page
+            if (position < pages.size) pages[position] = page
+            Thumbs.load(page.cover, model.thumbnailUrl)
+            page.title.text = model.title
+            page.subtitle.text = model.uploader
+            val label = model.durationLabel
+            page.duration.isVisible = label.isNotBlank()
+            page.duration.text = label
+            page.videoSlot.resizeMode =
+                if (AppPrefs.shortsFillMode) {
+                    AspectRatioFrameLayout.RESIZE_MODE_FILL
+                } else {
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+            page.contentDescription = "${model.title}, ${model.uploader}"
+            page.setOnClickListener { onVideoTap() }
         }
     }
 

@@ -427,6 +427,9 @@ object PlaybackCenter {
         private set
     private var usedFallback = false
 
+    /** One signed-in unlock retry per play attempt (v1.7.2 age-gate wiring). */
+    private var usedSignedInRetry = false
+
     var catalog: StreamCatalog? = null
         private set
 
@@ -1271,6 +1274,7 @@ object PlaybackCenter {
             return
         }
 
+        usedSignedInRetry = false
         setResolving(true)
         resolveJob = scope.launch {
             try {
@@ -1307,6 +1311,43 @@ object PlaybackCenter {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // v1.7.2 age-gate wiring: if the video is age-restricted /
+                // login-gated and the user IS signed in with Google, force the
+                // signed-in unlock engine (WEB/ANDROID + session cookies +
+                // SAPISIDHASH) and retry the resolve exactly once.
+                val msg = (e.message ?: "").lowercase()
+                val ageGated = e is org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException ||
+                    e is org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException ||
+                    msg.contains("age") || msg.contains("sign in") ||
+                    msg.contains("logged") || msg.contains("log in") ||
+                    msg.contains("confirm your age") || msg.contains("login")
+                if (ageGated && !entry.url.startsWith("file://") &&
+                    YouTubeAuth.isLoggedIn() && !usedSignedInRetry
+                ) {
+                    usedSignedInRetry = true
+                    com.sparktube.app.net.YouTubePlayerUnlock.forceUnlockForUrl(entry.url)
+                    catalog = null
+                    try {
+                        val info = YtRepository.streamInfo(entry.url)
+                        if (LiveFilter.isLive(info)) throw LiveContentException()
+                        if (currentEntry?.url != entry.url) return@launch
+                        catalog = StreamCatalog(info, entry.url)
+                        LocalStore.addToHistory(appContext, entry.toVideoEntry())
+                        RecommendEngine.logPlay(appContext, entry.url, entry.title, entry.uploader)
+                        applySources(playbackSpeed)
+                        notify { it.onItemChanged(currentEntry) }
+                        notify { it.onCatalogReady() }
+                        maybeFetchRelatedFallback()
+                        extendQueueFromRelated()
+                        ensureService()
+                        return@launch
+                    } catch (e2: CancellationException) {
+                        throw e2
+                    } catch (e2: Exception) {
+                        notify { it.onError(if (e2.message.isNullOrBlank()) e.javaClass.simpleName else e2.message!!) }
+                        return@launch
+                    }
+                }
                 if (!skipBrokenPlaylistItem()) {
                     if (e is LiveContentException) {
                         notify { it.onLiveContentBlocked() }

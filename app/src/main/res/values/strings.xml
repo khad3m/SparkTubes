@@ -147,6 +147,8 @@
     <string name="radio_started">Radio started</string>
     <string name="now_playing">Now playing</string>
     <string name="cd_back">Back</string>
+    <string name="shorts_fit_or_fill">Fit / Fill</string>
+    <string name="shorts_paused">Paused — tap to play</string>
     <string name="cd_previous">Previous</string>
     <string name="cd_next">Next</string>
     <string name="cd_play">Play</string>

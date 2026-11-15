@@ -46,6 +46,7 @@ object AppPrefs {
     private const val KEY_HARDWARE_ACCELERATION = "hardware_acceleration"
 
     // Shorts / reels: feed + search tab + navbar shortcut (on by default).
+    private const val KEY_SHORTS_FILL = "shorts_fill_mode"
     private const val KEY_SHORTS_ENABLED = "shorts_enabled"
 
     const val DEFAULT_COUNTRY = "US"
@@ -274,5 +275,12 @@ object AppPrefs {
         get() = sp.getBoolean(KEY_SHORTS_ENABLED, true)
         set(value) {
             sp.edit().putBoolean(KEY_SHORTS_ENABLED, value).apply()
+        }
+
+    /** Shorts player scale mode: false = fit (whole video), true = fill/crop (v1.7.2). */
+    var shortsFillMode: Boolean
+        get() = sp.getBoolean(KEY_SHORTS_FILL, false)
+        set(value) {
+            sp.edit().putBoolean(KEY_SHORTS_FILL, value).apply()
         }
 }

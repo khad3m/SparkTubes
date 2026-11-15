@@ -103,6 +103,7 @@ object YouTubePlayerUnlock {
             val candidates = if (loggedIn) {
                 listOf(
                     FallbackSpec("WEB", useCookies = true),
+                    FallbackSpec("ANDROID", useCookies = true),
                     FallbackSpec("TVHTML5", useCookies = true),
                     FallbackSpec("TVHTML5_SIMPLY_EMBEDDED_PLAYER", useCookies = true),
                     FallbackSpec("WEB_EMBEDDED_PLAYER", useCookies = true),
@@ -291,6 +292,11 @@ object YouTubePlayerUnlock {
                 reqBuilder.header("X-YouTube-Client-Name", "5")
                 reqBuilder.header("X-YouTube-Client-Version", "19.45.4")
             }
+            "ANDROID" -> {
+                reqBuilder.header("User-Agent", YouTubeAuth.UA_ANDROID)
+                reqBuilder.header("X-YouTube-Client-Name", "3")
+                reqBuilder.header("X-YouTube-Client-Version", "19.45.38")
+            }
             "ANDROID_TESTSUITE" -> {
                 reqBuilder.header("User-Agent", YouTubeAuth.UA_ANDROID)
                 reqBuilder.header("X-YouTube-Client-Name", "30")
@@ -378,6 +384,16 @@ object YouTubePlayerUnlock {
                 .put("gl", "US")
                 .put("utcOffsetMinutes", 0)
 
+            "ANDROID" -> JSONObject()
+                .put("clientName", "ANDROID")
+                .put("clientVersion", "19.45.38")
+                .put("androidSdkVersion", 34)
+                .put("osName", "Android")
+                .put("osVersion", "14")
+                .put("hl", "en")
+                .put("gl", "US")
+                .put("utcOffsetMinutes", 0)
+
             "ANDROID_TESTSUITE" -> JSONObject()
                 .put("clientName", "ANDROID_TESTSUITE")
                 .put("clientVersion", "1.9")
@@ -390,7 +406,7 @@ object YouTubePlayerUnlock {
 
             else -> JSONObject()
                 .put("clientName", "WEB")
-                .put("clientVersion", "2.20250101.01.00")
+                .put("clientVersion", "2.20250312.01.00")
                 .put("hl", "en")
                 .put("gl", "US")
                 .put("utcOffsetMinutes", 0)

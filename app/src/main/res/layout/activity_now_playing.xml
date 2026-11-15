@@ -29,18 +29,17 @@
             android:orientation="horizontal"
             android:padding="3dp">
 
+            <!-- Icon-only mode switcher (v1.7.2): the old wide labeled buttons
+                 collided with the centered grab-handle pill on narrow screens. -->
             <LinearLayout
                 android:id="@+id/miniMusicBtn"
-                android:layout_width="wrap_content"
+                android:layout_width="34dp"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_mode_switch_active"
                 android:clickable="true"
                 android:contentDescription="@string/switch_to_audio"
                 android:focusable="true"
-                android:gravity="center"
-                android:orientation="horizontal"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp">
+                android:gravity="center">
 
                 <ImageView
                     android:id="@+id/miniMusicIcon"
@@ -49,31 +48,18 @@
                     android:importantForAccessibility="no"
                     android:src="@drawable/ic_headset"
                     app:tint="@color/white" />
-
-                <TextView
-                    android:id="@+id/miniMusicLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="5dp"
-                    android:text="@string/switch_to_audio"
-                    android:textColor="@color/white"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
             </LinearLayout>
 
             <LinearLayout
                 android:id="@+id/miniVideoBtn"
-                android:layout_width="wrap_content"
+                android:layout_width="34dp"
                 android:layout_height="match_parent"
                 android:layout_marginStart="2dp"
                 android:background="@drawable/bg_mode_switch_inactive"
                 android:clickable="true"
                 android:contentDescription="@string/switch_to_video"
                 android:focusable="true"
-                android:gravity="center"
-                android:orientation="horizontal"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp">
+                android:gravity="center">
 
                 <ImageView
                     android:id="@+id/miniVideoIcon"
@@ -82,16 +68,6 @@
                     android:importantForAccessibility="no"
                     android:src="@drawable/ic_video_cam"
                     app:tint="#CCFFFFFF" />
-
-                <TextView
-                    android:id="@+id/miniVideoLabel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="5dp"
-                    android:text="@string/switch_to_video"
-                    android:textColor="#CCFFFFFF"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
 
