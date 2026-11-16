@@ -27,7 +27,6 @@ import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.ui.music.Motion
-import com.sparktube.app.ui.auth.AutoLoginActivity
 import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.databinding.ActivitySettingsPageBinding
@@ -183,7 +182,7 @@ class SettingsPageActivity : AppCompatActivity() {
     private fun gridCard(item: GridItem): LinearLayout =
         LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            minimumHeight = dp(112)
+            minimumHeight = dp(118)
             setPadding(dp(14), dp(14), dp(14), dp(14))
             setBackgroundResource(R.drawable.bg_card_soft)
             isClickable = true
@@ -332,14 +331,11 @@ class SettingsPageActivity : AppCompatActivity() {
                     GridItem(R.drawable.ic_update, getString(R.string.menu_check_update), "v${BuildConfig.VERSION_NAME}") {
                         checkForUpdatesNow()
                     },
-                    GridItem(R.drawable.ic_crash_test, getString(R.string.settings_crash_logs), "${crashLogCountLabel()} logs") {
-                        showCrashLogsSheet()
-                    },
-                    GridItem(R.drawable.ic_info, getString(R.string.diag_title), getString(R.string.diag_grid_sub)) {
-                        DiagnosticsActivity.start(this@SettingsPageActivity)
-                    },
                     GridItem(R.drawable.ic_delete, getString(R.string.menu_clear_data), "Cache · History") {
                         showClearDataSheet()
+                    }
+                    GridItem(R.drawable.ic_delete, "Cache guard", cacheSummary()) {
+                        confirmCacheClear()
                     }
                 )
             )
@@ -347,13 +343,9 @@ class SettingsPageActivity : AppCompatActivity() {
     }
 
     private fun showYouTubeAccountDialog() {
-        // v1.8.0: interactive browser login is now the recommended path — the
-        // headless engine cannot complete on many devices (diagnostics proven),
-        // and the cloud unlock tier handles 18+ videos server-side.
+        // Browser session only. Password/TOTP auto-login and cloud unlock are removed.
         val options = arrayOf(
-            "Browser login (recommended)",
-            "Cloud unlock — Worker URL (18+)",
-            "Auto login (headless)",
+            "Browser login",
             getString(R.string.youtube_account_sign_out)
         )
         AlertDialog.Builder(this)
@@ -361,8 +353,6 @@ class SettingsPageActivity : AppCompatActivity() {
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> YouTubeLoginActivity.start(this)
-                    1 -> showCloudUnlockDialog()
-                    2 -> AutoLoginActivity.start(this)
                     else -> {
                         YouTubeAuth.clearSession()
                         YtRepository.clearCache()
@@ -370,40 +360,6 @@ class SettingsPageActivity : AppCompatActivity() {
                         Toast.makeText(this, R.string.youtube_signed_out_toast, Toast.LENGTH_SHORT).show()
                     }
                 }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    /** v1.8.0: paste the URL of the user-deployed SparkTube Cloudflare worker. */
-    private fun showCloudUnlockDialog() {
-        val input = EditText(this).apply {
-            setText(AppPrefs.workerUrl)
-            setSelection(text.length)
-            setSingleLine()
-            hint = "https://sparktube-unlock.yourname.workers.dev"
-        }
-        val wrap = FrameLayout(this).apply {
-            setPadding(dp(22), dp(10), dp(22), 0)
-            addView(input)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Cloud unlock — Worker URL")
-            .setMessage(
-                "Ships pre-configured with the SparkTube project worker, which holds its own " +
-                    "YouTube session — 18+ videos resolve through it automatically. " +
-                    "Paste your own deployed worker URL to replace it, or leave empty to restore the default."
-            )
-            .setView(wrap)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val entered = input.text?.toString()?.trim().orEmpty().removeSuffix("/")
-                AppPrefs.workerUrl = entered
-                render()
-                Toast.makeText(
-                    this,
-                    if (entered.isBlank()) "Cloud unlock: default worker restored" else "Cloud unlock: $entered",
-                    Toast.LENGTH_SHORT
-                ).show()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -777,6 +733,33 @@ class SettingsPageActivity : AppCompatActivity() {
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 action(this)
                 Toast.makeText(this, doneRes, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+
+    private fun cacheSummary(): String {
+        val dirs = listOf(File(cacheDir, "image_cache"), File(cacheDir, "http_cache"))
+        val bytes = dirs.sumOf { dirSize(it) }
+        return formatLogSize(bytes) + " · capped"
+    }
+
+    private fun dirSize(file: File): Long {
+        if (!file.exists()) return 0L
+        if (file.isFile) return file.length()
+        return file.listFiles()?.sumOf { dirSize(it) } ?: 0L
+    }
+
+    private fun confirmCacheClear() {
+        AlertDialog.Builder(this)
+            .setTitle("Clear SparkTube cache?")
+            .setMessage("Only SparkTube's temporary image and HTTP metadata cache will be removed. Downloads, history and account data stay untouched.")
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                listOf(File(cacheDir, "image_cache"), File(cacheDir, "http_cache")).forEach { it.deleteRecursively() }
+                YtRepository.clearCache()
+                Toast.makeText(this, "Cache cleared ✓", Toast.LENGTH_SHORT).show()
+                render()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()

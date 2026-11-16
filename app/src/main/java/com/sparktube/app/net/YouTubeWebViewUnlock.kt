@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 
 /**
- * Hidden WebView V8 stream & token extractor for age-restricted (18+) videos (v1.7.8).
+ * Dedicated WebView playback resolver for age-restricted (18+) videos (v1.9.0).
  *
  * Root causes fixed from v1.7.7:
  * 1. Uses `YouTubeAuth.syncCookiesToWebView(created)` to inject each saved Google cookie
@@ -270,7 +270,7 @@ object YouTubeWebViewUnlock {
                             if (!json.isNullOrBlank() && json.contains("\"streamingData\"")) {
                                 val parsed = runCatching { JSONObject(json) }.getOrNull()
                                 if (parsed != null) {
-                                    val normalized = YouTubePlayerUnlock.deobfuscateAndNormalize(parsed, videoId)
+                                    val normalized = YouTubePlayerUnlock.normalizeWebViewPlayerJson(parsed, videoId)
                                     val sd = normalized.optJSONObject("streamingData")
                                     val hasFormats = (sd?.optJSONArray("formats")?.length() ?: 0) > 0 ||
                                         (sd?.optJSONArray("adaptiveFormats")?.length() ?: 0) > 0

@@ -1,10 +1,8 @@
 package com.sparktube.app.net
 
-import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebView
 import com.sparktube.app.util.AppPrefs
-import com.sparktube.ytauth.SecureStore
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -594,29 +592,5 @@ object YouTubeAuth {
         return headers
     }
 
-    // ---- v1.7.9: stored Google credentials for automatic sign-in (:ytauth) ----
-    // Encrypted with the Android Keystore via com.sparktube.ytauth.SecureStore;
-    // used by YouTubeAutoLogin when an age-restricted video needs the session.
 
-    fun storeCredentials(context: Context, email: String, password: String, totpSecret: String) {
-        SecureStore.put(context, "yt.email", email.trim())
-        SecureStore.put(context, "yt.password", password)
-        SecureStore.put(context, "yt.totp", totpSecret.trim())
-    }
-
-    fun storedCredentials(context: Context): Triple<String, String, String>? {
-        val email = SecureStore.get(context, "yt.email") ?: return null
-        val password = SecureStore.get(context, "yt.password") ?: return null
-        val totp = SecureStore.get(context, "yt.totp").orEmpty()
-        if (email.isBlank() || password.isBlank()) return null
-        return Triple(email, password, totp)
-    }
-
-    fun hasStoredCredentials(context: Context): Boolean = storedCredentials(context) != null
-
-    fun clearCredentials(context: Context) {
-        SecureStore.remove(context, "yt.email")
-        SecureStore.remove(context, "yt.password")
-        SecureStore.remove(context, "yt.totp")
-    }
 }

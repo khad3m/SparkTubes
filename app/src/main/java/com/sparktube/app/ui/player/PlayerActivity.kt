@@ -523,7 +523,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.fullscreenButton.isVisible = visible
         binding.lockButton.isVisible = false
         binding.ccButton.isVisible = false
-        binding.scaleButton.isVisible = false
+        binding.scaleButton.isVisible = visible && landscape
         binding.speedButton.isVisible = false
         binding.fullscreenVideosGridBtn.isVisible = visible && landscape
         binding.topLeftModeSwitcher.isVisible = !isInPictureInPictureMode && !isScreenLocked && (!landscape || controllerVisible)

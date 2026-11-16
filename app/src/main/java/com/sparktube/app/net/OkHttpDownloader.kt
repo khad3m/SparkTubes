@@ -8,6 +8,7 @@ import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
 import java.io.IOException
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -30,10 +31,22 @@ object OkHttpDownloader : Downloader() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient by lazy {
+        val ctx = com.sparktube.app.SparkTubeAppHolder.context
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            // Only HTTP metadata/HTML responses are cached here. ExoPlayer/googlevideo
+            // media bytes do NOT use this cache, so a large video can never fill it.
+            .cache(
+                Cache(
+                    File(ctx.cacheDir, "http_cache"),
+                    if (com.sparktube.app.util.DeviceTuning.lowRam(ctx)) 4L * 1024L * 1024L
+                    else 12L * 1024L * 1024L
+                )
+            )
+            .build()
+    }
 
     @Throws(IOException::class, ReCaptchaException::class)
     override fun execute(request: Request): Response {

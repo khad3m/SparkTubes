@@ -269,7 +269,14 @@ object YouTubePlayerUnlock {
         )
     }
 
-    /** Direct InnerTube unlock call for PlaybackCenter / YtRepository bypass. */
+    /**
+     * Direct unlock for normal videos.
+     *
+     * Age-restricted / login-gated responses are intentionally NOT sent through
+     * the legacy multi-client/NewPipe/cloud-style ladder. Those videos must use
+     * the real Android WebView session so YouTube can perform its browser-side
+     * checks and token handling.
+     */
     fun fetchUnlockedPlayerJson(videoId: String): JSONObject? {
         if (videoId.isBlank()) return null
 
@@ -284,13 +291,8 @@ object YouTubePlayerUnlock {
             "I", "Unlock", "unlock start vid=$videoId loggedIn=$loggedIn"
         )
 
-        // v1.8.2: the cloud worker tier is removed from the ladder. YouTube now
-        // requires a GVS PO Token on every WEB/MWEB stream URL (HTTP 403 from any
-        // IP without it — verified via yt-dlp + live probes), so server-resolved
-        // URLs can never stream. The worker stays deployed for diagnostics only.
-        // The WebView tier mints its own PO token inside a real browser context
-        // and remains the only working age-gate path.
-
+        // Do not use this method as an age-gate login/unlock engine.
+        // The WebView path is the only supported route for restricted playback.
         val candidates = candidateList(loggedIn)
         var muxedOnlyFallback: JSONObject? = null
 
@@ -302,7 +304,9 @@ object YouTubePlayerUnlock {
                 ensureNewPipeThrottlingSafe(fb, videoId)
                 if (hasDirectAdaptiveVideoAndAudio(fb)) {
                     unlockedCache[videoId] = CachedUnlock(fb.toString(), System.currentTimeMillis())
-                    com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "client unlock OK vid=$videoId")
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        "I", "Unlock", "client unlock OK vid=$videoId"
+                    )
                     return fb
                 } else if (muxedOnlyFallback == null) {
                     muxedOnlyFallback = fb
@@ -310,40 +314,21 @@ object YouTubePlayerUnlock {
             }
         }
 
-        // Next tier: Hidden WebView V8 engine (captures deciphered <video src> + in-page TVHTML5 fetch)
-        com.sparktube.app.util.DiagnosticsLogger.log(
-            "I", "Unlock", "web-client tiers exhausted vid=$videoId (muxedOnly=${muxedOnlyFallback != null})"
-        )
-        val webViewObj = YouTubeWebViewUnlock.extractPlayerJsonBlocking(videoId)
-        if (webViewObj != null) {
-            deobfuscateAndPruneStreamingData(webViewObj, videoId)
-            if (isPlayableWithDirectUrls(webViewObj)) {
-                normalizePlayerJson(webViewObj, null, videoId)
-                ensureNewPipeThrottlingSafe(webViewObj, videoId)
-                unlockedCache[videoId] = CachedUnlock(webViewObj.toString(), System.currentTimeMillis())
-                com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "webview unlock OK vid=$videoId")
-                return webViewObj
-            }
-        }
-        com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "webview tier miss vid=$videoId")
-
+        // Normal-video fallback only. If the caller has already identified an
+        // age/login gate it must call WebView directly and never reach this ladder.
         if (muxedOnlyFallback != null) {
-            unlockedCache[videoId] = CachedUnlock(muxedOnlyFallback.toString(), System.currentTimeMillis())
-            com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "muxed-only unlock OK vid=$videoId")
+            unlockedCache[videoId] = CachedUnlock(
+                muxedOnlyFallback.toString(), System.currentTimeMillis()
+            )
+            com.sparktube.app.util.DiagnosticsLogger.log(
+                "I", "Unlock", "muxed-only unlock OK vid=$videoId"
+            )
             return muxedOnlyFallback
         }
 
-        // Final tier: Public Piped API fallback
-        val pipedObj = fetchPublicPipedFallback(videoId)
-        if (pipedObj != null) {
-            normalizePlayerJson(pipedObj, null, videoId)
-            ensureNewPipeThrottlingSafe(pipedObj, videoId)
-            unlockedCache[videoId] = CachedUnlock(pipedObj.toString(), System.currentTimeMillis())
-            com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "piped unlock OK vid=$videoId")
-            return pipedObj
-        }
-        com.sparktube.app.util.DiagnosticsLogger.log("E", "Unlock", "ALL tiers failed vid=$videoId")
-
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "E", "Unlock", "normal client tiers failed vid=$videoId"
+        )
         return null
     }
 
@@ -351,6 +336,16 @@ object YouTubePlayerUnlock {
         deobfuscateAndPruneStreamingData(root, videoId)
         normalizePlayerJson(root, null, videoId)
         ensureNewPipeThrottlingSafe(root, videoId)
+        return root
+    }
+
+    /**
+     * WebView-only normalization. Deliberately does NOT invoke NewPipe's
+     * JavaScript signature/throttling machinery. The WebView is already the
+     * browser context responsible for resolving the restricted stream.
+     */
+    fun normalizeWebViewPlayerJson(root: JSONObject, videoId: String): JSONObject {
+        normalizePlayerJson(root, null, videoId)
         return root
     }
 
@@ -630,9 +625,18 @@ object YouTubePlayerUnlock {
                 }
             }
 
-            // Also check if this is NewPipe's metadata-only `$fields=microformat,playabilityStatus,storyboards,videoDetails`
-            // request where status is LOGIN_REQUIRED or UNPLAYABLE.
-            val unlocked = fetchUnlockedPlayerJson(videoId)
+            // IMPORTANT: age/login-gated content never enters the legacy
+            // InnerTube/NewPipe client ladder. Go straight to the real WebView
+            // session, which is the browser context capable of satisfying the
+            // current YouTube playback requirements.
+            val unlocked = if (isAgeOrLoginGated(origPlayerJson)) {
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "I", "Unlock", "age/login gate -> direct WebView vid=$videoId"
+                )
+                YouTubeWebViewUnlock.extractPlayerJsonBlocking(videoId, 30_000L)
+            } else {
+                fetchUnlockedPlayerJson(videoId)
+            }
             if (unlocked != null) {
                 val merged = JSONObject(unlocked.toString())
                 normalizePlayerJson(merged, origPlayerJson, videoId)
@@ -648,6 +652,20 @@ object YouTubePlayerUnlock {
                 responseBody
             }
         }.getOrDefault(responseBody)
+    }
+
+    private fun isAgeOrLoginGated(root: JSONObject?): Boolean {
+        val status = root?.optJSONObject("playabilityStatus")
+        val state = status?.optString("status").orEmpty().uppercase()
+        val reason = status?.optString("reason").orEmpty().lowercase()
+        return state == "LOGIN_REQUIRED" ||
+            state == "AGE_CHECK_REQUIRED" ||
+            state == "AGE_GATE" ||
+            reason.contains("age-restricted") ||
+            reason.contains("age restricted") ||
+            reason.contains("sign in") ||
+            reason.contains("login") ||
+            reason.contains("anonymously")
     }
 
     private fun isPlayableWithDirectUrls(root: JSONObject): Boolean {
@@ -988,99 +1006,6 @@ object YouTubePlayerUnlock {
             .put("contentCheckOk", true)
             .put("racyCheckOk", true)
             .put("context", contextObj)
-    }
-
-    private fun fetchPublicPipedFallback(videoId: String): JSONObject? {
-        val pipedInstances = listOf(
-            "https://pipedapi.kavin.rocks",
-            "https://pipedapi.tokhmi.xyz",
-            "https://pipedapi.moomoo.me",
-            "https://api.piped.private.coffee"
-        )
-        for (base in pipedInstances) {
-            try {
-                val req = Request.Builder()
-                    .url("$base/streams/$videoId")
-                    .header("User-Agent", YouTubeAuth.UA_WEB_CREATOR)
-                    .header("Accept", "application/json")
-                    .build()
-                directClient.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) return@use
-                    val body = resp.body?.string().orEmpty()
-                    if (body.isBlank()) return@use
-                    val piped = JSONObject(body)
-                    val title = piped.optString("title").takeIf { it.isNotBlank() } ?: return@use
-                    val uploader = piped.optString("uploader", "YouTube")
-                    val duration = piped.optLong("duration", 0L)
-
-                    val adaptive = JSONArray()
-                    val formats = JSONArray()
-
-                    val audioStreams = piped.optJSONArray("audioStreams")
-                    if (audioStreams != null) {
-                        for (i in 0 until audioStreams.length()) {
-                            val a = audioStreams.optJSONObject(i) ?: continue
-                            val u = a.optString("url").takeIf { it.startsWith("http") } ?: continue
-                            val br = a.optInt("bitrate", 128000).coerceAtLeast(64000)
-                            adaptive.put(
-                                JSONObject()
-                                    .put("itag", a.optInt("itag", 140))
-                                    .put("url", u)
-                                    .put("mimeType", a.optString("mimeType", "audio/mp4; codecs=\"mp4a.40.2\""))
-                                    .put("bitrate", br)
-                                    .put("averageBitrate", br)
-                                    .put("approxDurationMs", (duration * 1000L).toString())
-                            )
-                        }
-                    }
-
-                    val videoStreams = piped.optJSONArray("videoStreams")
-                    if (videoStreams != null) {
-                        for (i in 0 until videoStreams.length()) {
-                            val v = videoStreams.optJSONObject(i) ?: continue
-                            val u = v.optString("url").takeIf { it.startsWith("http") } ?: continue
-                            val videoOnly = v.optBoolean("videoOnly", true)
-                            val br = v.optInt("bitrate", 1500000).coerceAtLeast(300000)
-                            val obj = JSONObject()
-                                .put("itag", v.optInt("itag", if (videoOnly) 137 else 18))
-                                .put("url", u)
-                                .put("mimeType", v.optString("mimeType", "video/mp4; codecs=\"avc1.640028\""))
-                                .put("width", v.optInt("width", 1280))
-                                .put("height", v.optInt("height", 720))
-                                .put("fps", v.optInt("fps", 30))
-                                .put("qualityLabel", v.optString("quality", "720p"))
-                                .put("bitrate", br)
-                                .put("averageBitrate", br)
-                                .put("approxDurationMs", (duration * 1000L).toString())
-                            if (videoOnly) adaptive.put(obj) else formats.put(obj)
-                        }
-                    }
-
-                    if (adaptive.length() == 0 && formats.length() == 0) return@use
-
-                    val out = JSONObject()
-                        .put("playabilityStatus", JSONObject().put("status", "OK"))
-                        .put(
-                            "videoDetails",
-                            JSONObject()
-                                .put("videoId", videoId)
-                                .put("title", title)
-                                .put("author", uploader)
-                                .put("lengthSeconds", duration.toString())
-                        )
-                        .put(
-                            "streamingData",
-                            JSONObject()
-                                .put("expiresInSeconds", "21540")
-                                .put("formats", formats)
-                                .put("adaptiveFormats", adaptive)
-                        )
-                    return out
-                }
-            } catch (_: Throwable) {
-            }
-        }
-        return null
     }
 
     private fun normalizePlayerJson(target: JSONObject, fallbackSource: JSONObject?, videoId: String) {

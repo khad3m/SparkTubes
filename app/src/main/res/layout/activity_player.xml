@@ -280,9 +280,9 @@
         android:background="@drawable/bg_np_glass_circle_inset"
         android:padding="12dp"
         android:contentDescription="@string/action_scale_mode"
-        android:src="@drawable/ic_tune"
+        android:src="@drawable/ic_aspect_ratio"
         android:visibility="gone"
-        app:layout_constraintEnd_toStartOf="@id/ccButton"
+        app:layout_constraintEnd_toStartOf="@id/fullscreenButton"
         app:layout_constraintTop_toTopOf="parent"
         app:tint="@color/white" />
 

@@ -171,7 +171,7 @@
     <string name="channel_videos">Videos</string>
 
     <string name="action_fullscreen">Fullscreen</string>
-    <string name="action_scale_mode">Video scale mode</string>
+    <string name="action_scale_mode">Video display mode: Fit / Fill / Stretch</string>
     <string name="scale_fit">Fit — whole video visible</string>
     <string name="scale_crop">Crop — fills the screen</string>
     <string name="scale_stretch">Stretch — fill screen, may distort</string>

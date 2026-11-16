@@ -71,9 +71,46 @@ object LocalStore {
     private const val MAX_SUBSCRIPTIONS = 200
     private const val MAX_SEARCHES = 20
     private const val MAX_PLAYLIST_VIDEOS = 500
+    private const val KEY_HOME_CACHE = "home_feed_cache_v1"
+    private const val KEY_MUSIC_CACHE = "music_feed_cache_v1"
+    private const val MAX_FEED_CACHE_ITEMS = 18
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences("sparktube_local", Context.MODE_PRIVATE)
+
+
+    // ----- Tiny warm-start feed cache -----
+
+    /** Stores only lightweight UI metadata, never media bytes. */
+    fun saveFeedCache(context: Context, music: Boolean, country: String, query: String, items: List<VideoEntry>) {
+        val trimmed = items.take(MAX_FEED_CACHE_ITEMS)
+        val arr = JSONArray()
+        trimmed.forEach { e ->
+            arr.put(JSONObject().apply {
+                put("url", e.url); put("title", e.title); put("uploader", e.uploader)
+                put("thumb", e.thumbnailUrl); put("duration", e.durationSec); put("music", e.isMusic)
+            })
+        }
+        prefs(context).edit().putString(if (music) KEY_MUSIC_CACHE else KEY_HOME_CACHE,
+            JSONObject().apply { put("at", System.currentTimeMillis()); put("country", country); put("query", query); put("items", arr) }.toString()).apply()
+    }
+
+    fun readFeedCache(context: Context, music: Boolean, country: String, query: String, ttlMs: Long): List<VideoEntry> {
+        return runCatching {
+            val raw = prefs(context).getString(if (music) KEY_MUSIC_CACHE else KEY_HOME_CACHE, null) ?: return emptyList()
+            val o = JSONObject(raw)
+            if (o.optString("country") != country || o.optString("query") != query ||
+                System.currentTimeMillis() - o.optLong("at", 0L) > ttlMs) return emptyList()
+            val a = o.optJSONArray("items") ?: return emptyList()
+            buildList { for (i in 0 until a.length()) { val x = a.getJSONObject(i); add(VideoEntry(
+                x.optString("url"), x.optString("title"), x.optString("uploader"),
+                x.optString("thumb"), x.optLong("duration"), x.optBoolean("music"))) } }
+        }.getOrDefault(emptyList())
+    }
+
+    fun clearFeedCache(context: Context) {
+        prefs(context).edit().remove(KEY_HOME_CACHE).remove(KEY_MUSIC_CACHE).apply()
+    }
 
     // ----- History -----
 

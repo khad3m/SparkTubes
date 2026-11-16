@@ -56,7 +56,7 @@ class MenuFragment : Fragment() {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_MUSIC)
         }
         binding.rowGoogleAccount.setOnClickListener {
-            com.sparktube.app.ui.auth.AutoLoginActivity.start(requireContext())
+            com.sparktube.app.ui.auth.YouTubeLoginActivity.start(requireContext())
         }
         binding.rowCheckUpdate.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)

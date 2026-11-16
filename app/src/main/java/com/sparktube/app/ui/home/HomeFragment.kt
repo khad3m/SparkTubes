@@ -3,6 +3,9 @@ package com.sparktube.app.ui.home
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.LayoutInflater
+import android.view.Gravity
+import android.widget.LinearLayout
+import android.text.TextUtils
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -11,10 +14,12 @@ import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.sparktube.app.BuildConfig
 import com.sparktube.app.R
 import com.sparktube.app.data.Countries
 import com.sparktube.app.data.YtRepository
+import com.sparktube.app.data.VideoEntry
+import com.sparktube.app.data.LocalStore
+import com.sparktube.app.util.DeviceTuning
 import com.sparktube.app.databinding.FragmentHomeBinding
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.ui.ScrollsToTop
@@ -27,7 +32,6 @@ import com.sparktube.app.ui.music.NowPlayingActivity
 import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.ui.search.SearchActivity
 import com.sparktube.app.util.AppPrefs
-import com.sparktube.app.util.CrashReporter
 import com.sparktube.app.util.Formatters
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -85,17 +89,7 @@ class HomeFragment : Fragment(), ScrollsToTop {
         }
 
         setupCategoryChips()
-
-        binding.crashTestButton.isVisible = BuildConfig.DEBUG
-        binding.crashTestButton.setOnClickListener {
-            CrashReporter.logBreadcrumb("Test crash button tapped on Home")
-            CrashReporter.logBreadcrumb(
-                "loaded_country=${loadedCountry ?: "<not loaded>"}"
-            )
-            throw RuntimeException(
-                "SparkTube test crash — local crash report check"
-            )
-        }
+        setupPersonalizedChips()
 
         binding.retryButton.setOnClickListener { load() }
 
@@ -148,6 +142,52 @@ class HomeFragment : Fragment(), ScrollsToTop {
         }
     }
 
+    private fun setupPersonalizedChips() {
+        val row = binding.personalizedRow
+        row.removeAllViews()
+        val searches = LocalStore.searches(requireContext()).take(4)
+        val history = LocalStore.history(requireContext()).take(3)
+        val labels = LinkedHashSet<String>()
+        searches.forEach { if (it.length > 2) labels.add(it) }
+        history.forEach {
+            val words = it.title.trim().split(Regex("\\s+")).take(4).joinToString(" ")
+            if (words.length > 2) labels.add(words)
+        }
+        if (labels.isEmpty()) {
+            labels.add("For You")
+            labels.add("Fresh Picks")
+            labels.add("Trending Now")
+        }
+        labels.take(4).forEachIndexed { index, label ->
+            val chip = TextView(requireContext()).apply {
+                text = if (index == 0 && label == "For You") "✦ For You" else label
+                setTextColor(requireContext().getColor(R.color.chip_text))
+                textSize = 12f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                gravity = Gravity.CENTER
+                setPadding(dp(14), 0, dp(14), 0)
+                background = requireContext().getDrawable(R.drawable.bg_chip_selected)
+                isClickable = true
+                isFocusable = true
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            com.sparktube.app.ui.music.Motion.pressable(chip, 0.95f)
+            chip.setOnClickListener {
+                val q = if (label == "For You" || label == "Fresh Picks" || label == "Trending Now")
+                    selectedCategoryQuery else label
+                selectedCategoryQuery = q
+                load()
+            }
+            row.addView(chip, LinearLayout.LayoutParams(dp(0), dp(34)).apply {
+                width = LinearLayout.LayoutParams.WRAP_CONTENT
+                marginEnd = dp(8)
+            })
+        }
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
     override fun scrollToTop() {
         _binding?.list?.smoothScrollToPosition(0)
     }
@@ -187,9 +227,17 @@ class HomeFragment : Fragment(), ScrollsToTop {
         loadJob = viewLifecycleOwner.lifecycleScope.launch {
             b.errorView.isVisible = false
             b.emptyView.isVisible = false
-            showSkeleton(b.list, SkeletonAdapter.STYLE_VIDEO, count = 8)
+            val warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, DeviceTuning.feedCacheTtlMs(requireContext()))
+            if (warm.isNotEmpty()) {
+                b.list.adapter = adapter
+                adapter.submitList(warm.map { it.toUiModel() })
+                b.list.alpha = 1f
+            } else {
+                showSkeleton(b.list, SkeletonAdapter.STYLE_VIDEO, count = 8)
+            }
             try {
                 val items = YtRepository.searchVideos(catQuery, null).items
+                LocalStore.saveFeedCache(requireContext(), false, country, catQuery, items.map { it.toUiModel().toEntry() })
                 com.sparktube.app.util.DiagnosticsLogger.log("I", "Home", "category='$catQuery' items=${items.size}")
                 b.list.alpha = 0f
                 b.list.adapter = adapter

@@ -2,7 +2,6 @@ package com.sparktube.app.ui.music
 
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.TextUtils
 import android.util.TypedValue
@@ -17,6 +16,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.graphics.drawable.GradientDrawable
 import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -25,6 +25,7 @@ import com.google.android.material.imageview.ShapeableImageView
 import com.sparktube.app.R
 import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
+import com.sparktube.app.util.DeviceTuning
 import com.sparktube.app.databinding.FragmentMusicBinding
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.ui.common.SkeletonPulse
@@ -82,6 +83,7 @@ class MusicFragment : Fragment(), ScrollsToTop {
         Motion.pressable(binding.playlistsButton, 0.97f)
         Motion.pressable(binding.searchButton, 0.98f)
         Motion.pressable(binding.profileBadge, 0.9f)
+        setupQuickMixes()
 
         binding.searchButton.setOnClickListener {
             startActivity(SearchActivity.intent(requireContext(), music = true))
@@ -211,8 +213,16 @@ class MusicFragment : Fragment(), ScrollsToTop {
             if (!fromPull) showMusicSkeleton(b)
             try {
                 val country = AppPrefs.countryOrDefault
+                val warm = LocalStore.readFeedCache(requireContext(), true, country, "music", DeviceTuning.feedCacheTtlMs(requireContext()))
+                if (warm.isNotEmpty() && cachedModels.isEmpty()) {
+                    cachedModels = warm.map { it.toUiModel() }
+                    loadedCountry = country
+                    clearMusicSkeleton(b)
+                    bindTrending(b, cachedModels, animate = false)
+                }
                 val result = YtRepository.musicTrending(country)
                 val models = result.items.map { it.toUiModel() }
+                LocalStore.saveFeedCache(requireContext(), true, country, "music", models.map { it.toEntry() })
                 cachedModels = models
                 loadedCountry = country
                 if (!fromPull) clearMusicSkeleton(b)
@@ -521,6 +531,76 @@ class MusicFragment : Fragment(), ScrollsToTop {
 
     override fun scrollToTop() {
         _binding?.scroll?.smoothScrollTo(0, 0)
+    }
+
+    private fun setupQuickMixes() {
+        val row = binding.quickMixRow
+        row.removeAllViews()
+        val history = LocalStore.musicHistory(requireContext())
+        val searches = LocalStore.searches(requireContext(), music = true)
+        val mixes = listOf(
+            Triple("My Favorites", "favorites", R.drawable.ic_favorite),
+            Triple("Recently Played", "recent", R.drawable.ic_history),
+            Triple("Daily Chill", "lofi songs", R.drawable.ic_headset),
+            Triple("Bangla Hits", "bangla songs", R.drawable.ic_music_note),
+            Triple("Workout", "workout music", R.drawable.ic_play_arrow)
+        )
+        mixes.forEachIndexed { index, mix ->
+            val card = LinearLayout(requireContext()).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    setColor(requireContext().getColor(R.color.music_green).let { c ->
+                        android.graphics.Color.argb(28, android.graphics.Color.red(c), android.graphics.Color.green(c), android.graphics.Color.blue(c))
+                    })
+                    setStroke(dp(1), android.graphics.Color.argb(48, 255,255,255))
+                }
+                isClickable = true
+                isFocusable = true
+            }
+            val icon = ImageView(requireContext()).apply {
+                setImageResource(mix.third)
+                setColorFilter(requireContext().getColor(R.color.music_green))
+                contentDescription = null
+            }
+            card.addView(icon, LinearLayout.LayoutParams(dp(28), dp(28)))
+            val title = TextView(requireContext()).apply {
+                text = mix.first
+                setTextColor(requireContext().getColor(R.color.on_surface))
+                textSize = 12f
+                setTypeface(typeface, Typeface.BOLD)
+                gravity = Gravity.CENTER
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+            card.addView(title, LinearLayout.LayoutParams(dp(105), dp(30)))
+            Motion.pressable(card, 0.96f)
+            card.setOnClickListener {
+                when (mix.second) {
+                    "favorites" -> {
+                        val favs = LocalStore.musicFavorites(requireContext())
+                        if (favs.isEmpty()) Toast.makeText(requireContext(), "No favorite songs yet", Toast.LENGTH_SHORT).show()
+                        else PlaybackCenter.playMusic(favs.first().toQueueEntry(isMusic = true), radio = true)
+                    }
+                    "recent" -> {
+                        if (history.isEmpty()) Toast.makeText(requireContext(), "Your music history is empty", Toast.LENGTH_SHORT).show()
+                        else PlaybackCenter.playMusic(history.first().toQueueEntry(isMusic = true), radio = true)
+                    }
+                    else -> startActivity(SearchActivity.intent(requireContext(), music = true, prefill = mix.second))
+                }
+                if (mix.second == "favorites" || mix.second == "recent") NowPlayingActivity.start(requireContext())
+            }
+            row.addView(card, LinearLayout.LayoutParams(dp(116), dp(112)).apply {
+                marginEnd = dp(10)
+            })
+        }
+        if (searches.isNotEmpty()) {
+            binding.quickMixHint.text = "Based on your listening"
+        } else if (history.isNotEmpty()) {
+            binding.quickMixHint.text = "Based on your history"
+        }
     }
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(

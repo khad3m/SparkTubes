@@ -37,7 +37,20 @@ object DeviceTuning {
 
     /** Coil memory cache size as a fraction of total app RAM. */
     fun imageMemoryCachePercent(context: Context): Float =
-        if (lowRam(context)) 0.08f else 0.20f
+        if (lowRam(context)) 0.05f else 0.12f
+
+    /** Small bounded disk cache for thumbnails/remote artwork. Keep it deliberately
+     * tiny on 2 GB/32-bit phones so app cache cannot silently consume storage. */
+    fun imageDiskCacheBytes(context: Context): Long =
+        if (lowRam(context)) 24L * 1024L * 1024L else 64L * 1024L * 1024L
+
+    /** Metadata/feed cache: enough for instant warm start, never a large offline database. */
+    fun feedCacheTtlMs(context: Context): Long =
+        if (lowRam(context)) 2 * 60_000L else 5 * 60_000L
+
+    fun downloadThreads(context: Context): Int = if (lowRam(context)) 3 else 6
+
+    fun maxConcurrentDownloads(context: Context): Int = if (lowRam(context)) 1 else 3
 
     /** RGB_565 halves every thumbnail's memory; quality loss is invisible at list sizes. */
     fun imageBitmapConfig(context: Context): Bitmap.Config =

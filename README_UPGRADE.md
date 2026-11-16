@@ -24,11 +24,9 @@ stream URL. No server (worker, proxy, sandbox) can produce streamable URLs witho
 minting a PO token. **A real browser context is the only token mint.**
 
 ## What v1.8.2 does
-1. **Cloud tier removed from the unlock ladder** — it can never stream anymore;
    keeping it only burned ~15 s per age video. The worker stays deployed
    (`sparktube-unlock.khadimsorder1.workers.dev`) with the fresh session secret for
    diagnostics and future PO-token work; Settings keeps the URL field.
-2. **Dead headless AutoLogin removed everywhere** (resolve kickoff + all four
    `ensureSignedIn` call sites + the 65 s forced refresh). It never completed once.
 3. **Interactive Browser login becomes the automatic fix path**: when the ladder
    fails on an age-gated video, the app now launches the Browser login activity by

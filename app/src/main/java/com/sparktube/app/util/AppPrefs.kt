@@ -37,9 +37,6 @@ object AppPrefs {
     private const val KEY_YOUTUBE_SESSION_INDEX = "youtube_session_index"
     private const val KEY_YOUTUBE_STS = "youtube_sts"
 
-    // v1.8.0: user-deployed Cloudflare Worker URL for the cloud unlock tier (18+).
-    private const val KEY_WORKER_URL = "worker_url"
-
     // Default video quality: separate values for Wi-Fi and mobile data.
     private const val KEY_DEFAULT_VIDEO_HEIGHT_WIFI = "default_video_height_wifi"
     private const val KEY_DEFAULT_VIDEO_HEIGHT_DATA = "default_video_height_data"
@@ -204,20 +201,6 @@ object AppPrefs {
         get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_COOKIES, "") ?: "" else ""
         set(value) {
             if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_COOKIES, value).apply()
-        }
-
-    /**
-     * v1.8.1: cloud unlock worker URL. Ships pre-configured (the project worker holds
-     * its own YouTube session); the user can point it at their own deployed worker.
-     * Setting a blank value restores the default.
-     */
-    const val DEFAULT_WORKER_URL = "https://sparktube-unlock.khadimsorder1.workers.dev"
-
-    var workerUrl: String
-        get() {
-            if (!this::sp.isInitialized) return DEFAULT_WORKER_URL
-            val stored = sp.getString(KEY_WORKER_URL, "") ?: ""
-            return if (stored.isBlank()) DEFAULT_WORKER_URL else stored
         }
         set(value) {
             if (this::sp.isInitialized) sp.edit().putString(KEY_WORKER_URL, value).apply()

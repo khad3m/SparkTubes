@@ -5,6 +5,9 @@ import android.content.ComponentCallbacks2
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.imageLoader
+import coil.disk.DiskCache
+import okhttp3.Cache
+import java.io.File
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.util.AppPrefs
@@ -14,6 +17,11 @@ import com.sparktube.app.util.Themes
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.localization.ContentCountry
 import org.schabi.newpipe.extractor.localization.Localization
+
+object SparkTubeAppHolder {
+    lateinit var context: android.content.Context
+        private set
+}
 
 class SparkTubeApp : Application(), ImageLoaderFactory {
 
@@ -33,6 +41,7 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
         // see util/CrashReporter.kt and Settings → Crash logs.
         CrashReporter.install(this)
 
+        SparkTubeAppHolder.context = applicationContext
         AppPrefs.init(this)
         // v1.7.12/13: full diagnostics trail — installed after prefs init so the
         // session header carries the real country; chains crash logging too.
@@ -99,6 +108,12 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
             .memoryCache {
                 coil.memory.MemoryCache.Builder(this)
                     .maxSizePercent(DeviceTuning.imageMemoryCachePercent(this).toDouble())
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(File(cacheDir, "image_cache"))
+                    .maxSize(DeviceTuning.imageDiskCacheBytes(this))
                     .build()
             }
             .bitmapConfig(DeviceTuning.imageBitmapConfig(this))

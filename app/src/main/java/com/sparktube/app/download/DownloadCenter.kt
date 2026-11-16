@@ -18,6 +18,7 @@ import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.playback.StreamCatalog
 import com.sparktube.app.playback.effectiveHeight
 import com.sparktube.app.util.AppPrefs
+import com.sparktube.app.util.DeviceTuning
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,7 +61,7 @@ object DownloadCenter {
     const val STATUS_FAILED = "FAILED"
 
     /** Parallel connections per file (acceleration factor). */
-    private const val THREADS_PER_FILE = 6
+    private fun threadsPerFile(): Int = DeviceTuning.downloadThreads(appCtx)
 
     /** Minimum file size (bytes) below which parallel splitting is pointless. */
     private const val MIN_SIZE_FOR_SPLIT = 2L * 1024L * 1024L
@@ -940,7 +941,7 @@ object DownloadCenter {
             }
 
             size = totalSize
-            val chunkCount = if (!rangesSupported || totalSize < MIN_SIZE_FOR_SPLIT) 1 else THREADS_PER_FILE
+            val chunkCount = if (!rangesSupported || totalSize < MIN_SIZE_FOR_SPLIT) 1 else threadsPerFile()
             val bounds = (0 until chunkCount).map { i ->
                 val start = totalSize * i / chunkCount
                 val end = if (i == chunkCount - 1) totalSize - 1L else (totalSize * (i + 1) / chunkCount - 1L)

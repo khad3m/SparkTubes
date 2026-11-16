@@ -38,13 +38,10 @@ object DiagnosticsLogger {
     fun install(context: Context) {
         dir = File(context.applicationContext.filesDir, "diagnostics").apply { mkdirs() }
         val prefs = runCatching { AppPrefs.countryOrDefault }.getOrDefault("?")
-        val creds = runCatching {
-            com.sparktube.app.net.YouTubeAuth.storedCredentials(context) != null
-        }.getOrDefault(false)
         val loggedIn = runCatching { com.sparktube.app.net.YouTubeAuth.isLoggedIn() }.getOrDefault(false)
         log("I", "Session", "start app=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) " +
             "android=${Build.VERSION.RELEASE} sdk=${Build.VERSION.SDK_INT} model=${Build.MODEL} " +
-            "country=$prefs hasCreds=$creds loggedIn=$loggedIn")
+            "country=$prefs loggedIn=$loggedIn")
         wrapCrashHandler()
     }
 
