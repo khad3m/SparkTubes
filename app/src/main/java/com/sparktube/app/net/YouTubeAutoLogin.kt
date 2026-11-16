@@ -93,7 +93,7 @@ object YouTubeAutoLogin {
                 YouTubeAuth.saveCookies(result.cookies, result.account)
                 lastError = null
                 com.sparktube.app.util.DiagnosticsLogger.log(
-                    "I", "AutoLogin", "success cookies=${result.cookies.size} account=${result.account.take(40)}"
+                    "I", "AutoLogin", "success cookieHeaderLen=${result.cookies.length} account=${result.account.take(40)}"
                 )
                 runCatching { YouTubeAuth.visitorData() }
                 true
