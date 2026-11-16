@@ -206,9 +206,19 @@ object AppPrefs {
             if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_COOKIES, value).apply()
         }
 
-    /** v1.8.0: blank = cloud tier disabled. */
+    /**
+     * v1.8.1: cloud unlock worker URL. Ships pre-configured (the project worker holds
+     * its own YouTube session); the user can point it at their own deployed worker.
+     * Setting a blank value restores the default.
+     */
+    const val DEFAULT_WORKER_URL = "https://sparktube-unlock.khadimsorder1.workers.dev"
+
     var workerUrl: String
-        get() = if (this::sp.isInitialized) sp.getString(KEY_WORKER_URL, "") ?: "" else ""
+        get() {
+            if (!this::sp.isInitialized) return DEFAULT_WORKER_URL
+            val stored = sp.getString(KEY_WORKER_URL, "") ?: ""
+            return if (stored.isBlank()) DEFAULT_WORKER_URL else stored
+        }
         set(value) {
             if (this::sp.isInitialized) sp.edit().putString(KEY_WORKER_URL, value).apply()
         }

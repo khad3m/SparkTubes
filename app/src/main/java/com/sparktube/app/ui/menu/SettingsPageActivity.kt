@@ -390,9 +390,9 @@ class SettingsPageActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Cloud unlock — Worker URL")
             .setMessage(
-                "Deploy the SparkTube worker on Cloudflare (free — guide in the release notes), " +
-                    "then paste its URL here. 18+ videos resolve through it with your own session cookies. " +
-                    "Leave empty to disable the cloud tier."
+                "Ships pre-configured with the SparkTube project worker, which holds its own " +
+                    "YouTube session — 18+ videos resolve through it automatically. " +
+                    "Paste your own deployed worker URL to replace it, or leave empty to restore the default."
             )
             .setView(wrap)
             .setPositiveButton(android.R.string.ok) { _, _ ->
@@ -401,7 +401,7 @@ class SettingsPageActivity : AppCompatActivity() {
                 render()
                 Toast.makeText(
                     this,
-                    if (entered.isBlank()) "Cloud unlock disabled" else "Cloud unlock: $entered",
+                    if (entered.isBlank()) "Cloud unlock: default worker restored" else "Cloud unlock: $entered",
                     Toast.LENGTH_SHORT
                 ).show()
             }

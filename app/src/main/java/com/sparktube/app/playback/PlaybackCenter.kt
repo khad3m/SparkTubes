@@ -1724,9 +1724,9 @@ object PlaybackCenter {
     }
 
     /**
-     * v1.8.0: age-gated failures get actionable guidance instead of a bare
-     * NewPipe message — the two working fixes are a fresh session via the
-     * interactive browser login and (for 18+) the cloud unlock worker URL.
+     * v1.8.1: age-gated failures get actionable guidance. The cloud tier ships
+     * pre-configured and is tried automatically; this message tells the user
+     * where to look (Diagnostics) and the fallback (browser login refresh).
      */
     private fun withAgeGateHint(e: Throwable): String {
         val base = if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message.orEmpty()
@@ -1735,11 +1735,7 @@ object PlaybackCenter {
             base.contains("sign in", ignoreCase = true) ||
             base.contains("login", ignoreCase = true)
         if (!isAgeGate) return base
-        return if (com.sparktube.app.util.AppPrefs.workerUrl.isBlank()) {
-            "$base — 18+ ফিক্স: Settings → Account এ \"Browser login\" করুন, তারপর Account → \"Cloud unlock\" এ Worker URL সেট করুন"
-        } else {
-            "$base — 18+ ফিক্স: Settings → Account এ \"Browser login\" দিয়ে fresh session নিন"
-        }
+        return "$base — 18+ ফিক্স: Cloud unlock স্বয়ংক্রিয়ভাবে চেষ্টা করে। Diagnostics Log-এ \"cloud tier\" লাইন দেখুন; সমস্যা হলে Settings → Account এ \"Browser login\" দিয়ে fresh session নিন"
     }
 
     private fun skipBrokenPlaylistItem(): Boolean {

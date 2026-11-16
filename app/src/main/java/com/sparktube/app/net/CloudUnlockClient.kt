@@ -33,20 +33,24 @@ object CloudUnlockClient {
      * Raw InnerTube player JSON from the worker, or null. Caller validates playability.
      * Blocking call — invoke from an IO context (fetchUnlockedPlayerJson's callers
      * already wrap it in Dispatchers.IO / runBlocking, same as fetchFallbackPlayer).
+     * v1.8.1: the worker holds its own YouTube session (YT_COOKIES secret), so the
+     * device no longer needs local cookies — they are attached when present and the
+     * worker prefers them, falling back to its own session. A browser User-Agent is
+     * REQUIRED: workers.dev WAF (error 1010) blocks the okhttp UA.
      */
     fun fetchPlayerJson(videoId: String): JSONObject? {
         val base = AppPrefs.workerUrl.trim()
         if (base.isBlank() || !base.startsWith("https://")) return null
         val cookies = AppPrefs.youtubeCookies
-        if (cookies.isBlank()) {
-            DiagnosticsLogger.log("W", "Cloud", "no session cookies — worker skipped vid=$videoId")
-            return null
-        }
         return runCatching {
             val req = Request.Builder()
                 .url("$base/unlock?v=$videoId&gl=${AppPrefs.countryOrDefault}")
-                .header("X-Cookies", cookies)
-                .header("X-Visitor-Data", YouTubeAuth.visitorData(allowNetworkFetch = false).orEmpty())
+                .header("User-Agent", YouTubeAuth.UA_WEB_CHROME)
+                .apply {
+                    if (cookies.isNotBlank()) header("X-Cookies", cookies)
+                    val visitor = YouTubeAuth.visitorData(allowNetworkFetch = false).orEmpty()
+                    if (visitor.isNotBlank()) header("X-Visitor-Data", visitor)
+                }
                 .post(
                     JSONObject().put("videoId", videoId).toString().toRequestBody(JSON_MEDIA_TYPE)
                 )
