@@ -812,11 +812,29 @@ object YouTubePlayerUnlock {
         reqBuilder.post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
 
         httpClient.newCall(reqBuilder.build()).execute().use { resp ->
-            if (!resp.isSuccessful) return@runCatching null
+            if (!resp.isSuccessful) {
+                // v1.7.14: never swallow the failure reason silently — the HTTP
+                // code per client is the decisive stale-session vs unverified
+                // account signal in the diagnostics trail.
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "W", "Unlock",
+                    "client ${spec.kind} HTTP ${resp.code} vid=$videoId auth=${spec.useCookies}"
+                )
+                return@runCatching null
+            }
             val text = resp.body?.string().orEmpty()
             if (text.isBlank()) return@runCatching null
             YouTubeAuth.sniffInnerTubeResponse(text)
-            JSONObject(text)
+            val json = JSONObject(text)
+            val ps = json.optJSONObject("playabilityStatus")
+            val status = ps?.optString("status").orEmpty()
+            if (status.isNotEmpty() && status != "OK") {
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "W", "Unlock",
+                    "client ${spec.kind} status=$status vid=$videoId reason=${ps?.optString("reason")?.take(90).orEmpty()}"
+                )
+            }
+            json
         }
     }.getOrNull()
 

@@ -980,9 +980,9 @@ object PlaybackCenter {
                     if (!YouTubeAuth.isLoggedIn()) {
                         runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                     }
-                    val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-                    }?.let { StreamCatalog.fromPlayerJson(it, first.url) }
+                    // v1.7.14: refresh-first (ladder already ran inside streamInfo
+                    // via ensurePlayable), WebView extraction last.
+                    val direct = unlockWithSessionRefresh(vid, first.url)
                         ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
                             ?.let { YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid) }
                             ?.let { StreamCatalog.fromPlayerJson(it, first.url) }
@@ -1614,16 +1614,17 @@ object PlaybackCenter {
                     if (!YouTubeAuth.isLoggedIn()) {
                         runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                     }
-                    val directJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-                    } ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
-                        ?.let {
-                            kotlinx.coroutines.withContext(Dispatchers.IO) {
-                                YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid)
-                            }
-                        }
-                    val directCatalog = directJson?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
-                        ?: refreshSessionAndUnlock(vid, entry.url)
+                    // v1.7.14: the unlock ladder already ran inside streamInfo
+                    // (OkHttpDownloader's ensurePlayable intercepts the player
+                    // response), so re-running it here wastes ~30 s before the
+                    // session refresh ever starts. Refresh FIRST, WebView last.
+                    val directCatalog = unlockWithSessionRefresh(vid, entry.url)
+                        ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
+                            ?.let {
+                                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                    YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid)
+                                }
+                            }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
                     if (directCatalog != null && currentEntry?.url == entry.url) {
                         catalog = directCatalog
                         LocalStore.addToHistory(appContext, entry.toVideoEntry())
@@ -1658,14 +1659,19 @@ object PlaybackCenter {
     @Volatile private var lastForceRefreshAt: Long = 0L
 
     /**
-     * v1.7.13: when the unlock ladder fails while a session exists, the saved
-     * cookies are usually stale (dead session → YouTube answers anonymously
-     * and even signed-in clients see LOGIN_REQUIRED). Force one fresh headless
-     * sign-in, then retry the unlock with the new cookies. Throttled to once
-     * per 2 minutes so un-unlockable videos never loop logins.
+     * v1.7.14: the unlock ladder already runs inside streamInfo (OkHttpDownloader's
+     * ensurePlayable intercepts the player response), so re-running it in the catch
+     * wastes ~30 s before the session refresh ever starts. When a session exists
+     * but the ladder failed, the saved cookies are usually stale — force one fresh
+     * headless sign-in, then retry the unlock with the new cookies. Throttled to
+     * once per 2 minutes so un-unlockable videos never loop logins. Returns null →
+     * caller falls through to WebView extraction.
      */
-    private suspend fun refreshSessionAndUnlock(vid: String, url: String): StreamCatalog? {
-        if (!YouTubeAuth.isLoggedIn()) return null
+    private suspend fun unlockWithSessionRefresh(vid: String, url: String): StreamCatalog? {
+        if (!YouTubeAuth.isLoggedIn()) {
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "no session — refresh skipped vid=$vid")
+            return null
+        }
         val now = System.currentTimeMillis()
         if (now - lastForceRefreshAt < 2 * 60_000L) {
             com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "refresh skipped (recent) vid=$vid")
@@ -1770,9 +1776,9 @@ object PlaybackCenter {
                     if (!YouTubeAuth.isLoggedIn()) {
                         runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                     }
-                    val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                        YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-                    }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                    // v1.7.14: refresh-first (ladder already ran inside streamInfo),
+                    // WebView extraction last.
+                    val direct = unlockWithSessionRefresh(vid, entry.url)
                         ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
                             ?.let {
                                 kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -1780,7 +1786,6 @@ object PlaybackCenter {
                                 }
                             }
                             ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
-                        ?: refreshSessionAndUnlock(vid, entry.url)
                     if (direct != null && currentEntry?.url == entry.url) {
                         catalog = direct
                         LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())
