@@ -14,7 +14,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.sparktube.app.BuildConfig
 import com.sparktube.app.R
 import com.sparktube.app.data.Countries
-import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.FragmentHomeBinding
 import com.sparktube.app.playback.PlaybackCenter
@@ -30,11 +29,9 @@ import com.sparktube.app.ui.search.SearchActivity
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.CrashReporter
 import com.sparktube.app.util.Formatters
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class HomeFragment : Fragment(), ScrollsToTop {
 
@@ -43,7 +40,7 @@ class HomeFragment : Fragment(), ScrollsToTop {
 
     private lateinit var adapter: VideoAdapter
     private var loadedCountry: String? = null
-    private var selectedCategoryQuery: String? = null
+    private var selectedCategoryQuery: String = "hindi trending songs"
     private var loadJob: kotlinx.coroutines.Job? = null
     private var lastLoadedAt = 0L
 
@@ -113,11 +110,17 @@ class HomeFragment : Fragment(), ScrollsToTop {
     }
 
     private fun setupCategoryChips() {
-        val chips: List<Pair<TextView, String?>> = listOf(
-            binding.chipAll to null,
-            binding.chipBanglaNews to "bangla news today latest",
+        // v1.7.11: the slow "All" (personalized home feed) category is removed;
+        // every category is now a fast search query, with Hindi Trending Songs
+        // as the home default.
+        val chips: List<Pair<TextView, String>> = listOf(
+            binding.chipHindiTrending to "hindi trending songs",
             binding.chipBanglaSong to "new bangla song latest",
+            binding.chipBanglaNatok to "new bangla natok full",
             binding.chipLatestHindi to "latest hindi song new",
+            binding.chipLofi to "lofi songs",
+            binding.chipItemSong to "bangla hindi item song",
+            binding.chipBanglaNews to "bangla news today latest",
             binding.chipMusic to "music",
             binding.chipGaming to "gaming",
             binding.chipTech to "technology ai review",
@@ -181,20 +184,12 @@ class HomeFragment : Fragment(), ScrollsToTop {
 
         loadJob?.cancel()
         val b = _binding ?: return
-        val ctx = requireContext()
         loadJob = viewLifecycleOwner.lifecycleScope.launch {
             b.errorView.isVisible = false
             b.emptyView.isVisible = false
             showSkeleton(b.list, SkeletonAdapter.STYLE_VIDEO, count = 8)
             try {
-                val items = if (catQuery.isNullOrBlank()) {
-                    val snap = withContext(Dispatchers.IO) {
-                        RecommendEngine.snapshot(ctx)
-                    }
-                    YtRepository.personalizedFeed(country, snap)
-                } else {
-                    YtRepository.searchVideos(catQuery, null).items
-                }
+                val items = YtRepository.searchVideos(catQuery, null).items
                 b.list.alpha = 0f
                 b.list.adapter = adapter
                 adapter.submitList(items.map { it.toUiModel() })

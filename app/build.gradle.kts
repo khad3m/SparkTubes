@@ -13,8 +13,8 @@ android {
         applicationId = "com.sparktube.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 33
-        versionName = "1.7.10"
+        versionCode = 34
+        versionName = "1.7.11"
     }
 
     val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")

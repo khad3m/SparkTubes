@@ -22,7 +22,10 @@
     <string name="search_music_hint">Search songs</string>
     <string name="trending_in">Suggested in %1$s %2$s</string>
     <string name="crash_test_desc">Test crash</string>
-    <string name="chip_all">All</string>
+    <string name="chip_hindi_trending">Hindi Trending Songs</string>
+    <string name="chip_bangla_natok">Bangla Natok</string>
+    <string name="chip_lofi">Lofi Song</string>
+    <string name="chip_item_song">Item Song</string>
     <string name="chip_bangla_news">Bangla News</string>
     <string name="chip_bangla_song">Bangla Song</string>
     <string name="chip_latest_hindi">Latest Hindi</string>
