@@ -27,7 +27,7 @@ import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.ui.music.Motion
-import com.sparktube.app.ui.auth.YouTubeLoginActivity
+import com.sparktube.app.ui.auth.AutoLoginActivity
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.databinding.ActivitySettingsPageBinding
 import com.sparktube.app.download.DownloadCenter
@@ -344,7 +344,7 @@ class SettingsPageActivity : AppCompatActivity() {
 
     private fun showYouTubeAccountDialog() {
         if (!YouTubeAuth.isLoggedIn()) {
-            YouTubeLoginActivity.start(this)
+            AutoLoginActivity.start(this)
             return
         }
         val options = arrayOf(
@@ -355,7 +355,7 @@ class SettingsPageActivity : AppCompatActivity() {
             .setTitle(R.string.youtube_account_connected)
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> YouTubeLoginActivity.start(this)
+                    0 -> AutoLoginActivity.start(this)
                     1 -> {
                         YouTubeAuth.clearSession()
                         YtRepository.clearCache()

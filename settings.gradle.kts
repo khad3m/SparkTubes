@@ -19,3 +19,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "SparkTube"
 include(":app")
+include(":ytauth")

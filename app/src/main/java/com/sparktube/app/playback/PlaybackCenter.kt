@@ -41,6 +41,7 @@ import com.sparktube.app.data.YtRepository
 import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.net.YouTubeAuth
+import com.sparktube.app.net.YouTubeAutoLogin
 import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.net.ParallelRangeDataSource
 import com.sparktube.app.ui.widget.SparkTubeWidgetProvider
@@ -964,6 +965,11 @@ object PlaybackCenter {
                     msg.contains("age") || msg.contains("anonymously") || msg.contains("sign in") || msg.contains("login")
                 if (ageGated && !first.url.startsWith("file://")) {
                     val vid = DownloadCenter.videoIdOf(first.url)
+                    // v1.7.9: establish the Google session automatically (:ytauth)
+                    // before the age-gate unlock ladder runs.
+                    if (!YouTubeAuth.isLoggedIn()) {
+                        runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                    }
                     val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
                     }?.let { StreamCatalog.fromPlayerJson(it, first.url) }
@@ -1581,6 +1587,11 @@ object PlaybackCenter {
                 if (e !is LiveContentException && !entry.url.startsWith("file://") && !usedSignedInRetry) {
                     usedSignedInRetry = true
                     val vid = DownloadCenter.videoIdOf(entry.url)
+                    // v1.7.9: automatic Google session establishment before the
+                    // signed-in unlock retry (:ytauth engine).
+                    if (!YouTubeAuth.isLoggedIn()) {
+                        runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                    }
                     val directJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
                     } ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
@@ -1679,6 +1690,11 @@ object PlaybackCenter {
             } catch (e: Exception) {
                 if (e !is LiveContentException && !entry.url.startsWith("file://")) {
                     val vid = DownloadCenter.videoIdOf(entry.url)
+                    // v1.7.9: automatic Google session establishment before the
+                    // age-gate unlock ladder (:ytauth engine).
+                    if (!YouTubeAuth.isLoggedIn()) {
+                        runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                    }
                     val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
                     }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
@@ -2195,6 +2211,10 @@ object PlaybackCenter {
         }.getOrElse { err ->
             if (err is LiveContentException) throw err
             val vid = DownloadCenter.videoIdOf(entry.url)
+            // v1.7.9: automatic Google session establishment for the audio path.
+            if (!YouTubeAuth.isLoggedIn()) {
+                runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+            }
             val direct = kotlinx.coroutines.runBlocking {
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)

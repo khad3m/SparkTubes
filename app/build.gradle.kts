@@ -13,8 +13,8 @@ android {
         applicationId = "com.sparktube.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 31
-        versionName = "1.7.8"
+        versionCode = 32
+        versionName = "1.7.9"
     }
 
     val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
@@ -77,6 +77,9 @@ dependencies {
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // :ytauth — Google sign-in + age-restricted session engine (in-repo library)
+    implementation(project(":ytauth"))
 
     implementation(files("libs/newpipeextractor-0.26.5-android-compat.jar"))
     implementation("org.jsoup:jsoup:1.22.2")

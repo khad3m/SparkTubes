@@ -53,6 +53,12 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
+            android:name=".ui.auth.AutoLoginActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".ui.search.SearchActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
