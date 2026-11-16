@@ -1,38 +1,46 @@
-# SparkTube v1.8.1 — Fully Managed Cloud Unlock (Zero Setup) (`versionCode = 40`)
+# SparkTube v1.8.2 — WebView Is the Only Streaming Path Now (`versionCode = 41`)
 
-## What changed vs v1.8.0
-v1.8.0 shipped the cloud unlock architecture but required the user to deploy a
-Cloudflare worker and log in interactively. v1.8.1 completes the setup
-end-to-end **for the user**:
+## The hard truth this release is built on (all verified live)
+The user's v1.8.1 log showed `cloud tier miss … status=OK attempts=WEB:LOGIN_REQUIRED,
+MWEB:HTTP 400, WEB:OK` — the worker's session WORKS (age gate passed) but playback
+still failed. Investigation with the deployed worker + a 5-variant auth matrix
+(`/diag-mweb`) + yt-dlp ground truth established, step by step:
 
-1. **Google session established server-side** — the project worker now holds a
-   fresh, age-verified YouTube session (SID/HSID/SSID/SAPISID/__Secure-*PSID…,
-   captured via a real interactive browser flow with TOTP).
-2. **Worker deployed and live**: `https://sparktube-unlock.khadimsorder1.workers.dev`
-   - `/unlock?v=<id>` — WEB client with the secret session (verified live:
-     `status=OK, session=worker, WEB:OK, formats 1+20` on the exact age-gated
-     video from the diagnostics logs, `52h_AS2fEl8`).
-   - Session priority: device cookies (if fresh) → worker secret session.
-   - `/stream?url=…` Range-aware googlevideo proxy fallback.
-3. **Worker URL baked as the default** (`AppPrefs.DEFAULT_WORKER_URL`) — the
-   app ships pre-configured; Settings → Account → Cloud unlock can override it
-   or restore the default.
-4. **No local login required for 18+**: `CloudUnlockClient` calls the worker
-   even with no local cookies (X-Cookies attached only when present).
-5. **Browser User-Agent on worker calls** — workers.dev WAF (error 1010)
-   blocks the okhttp UA; `UA_WEB_CHROME` is now sent.
-6. Age-gate error hint updated: cloud tier is automatic; Diagnostics shows the
-   `cloud tier OK / miss` lines.
+1. The worker's WEB response contains **only ciphered formats** (0 direct URLs) —
+   the app deciphers them fine, but its `Range: bytes=0-0` probe from the device
+   then gets **HTTP 403**, so it prunes everything → "miss".
+2. MWEB with a valid session needed a specific auth shape (SAPISIDHASH rejects the
+   m.youtube.com origin with HTTP 400; **all-www origin/UA** = the only accepted
+   combo — found via the variant matrix). But even the fixed MWEB response is
+   ciphered now.
+3. Decisive: **yt-dlp with the same fresh cookies** passes the age gate (status OK)
+   and then warns: *"mweb client https formats require a GVS PO Token which was not
+   provided. They will be skipped as they may yield HTTP Error 403."* Probes
+   confirmed: deciphered URLs, direct URLs, even `serverAbrStreamingUrl` — **all 403
+   without a PO Token, from any IP, through the worker's `/stream` proxy included.**
 
-## Verification chain (all done live this release)
-- Stealth browser Google login (headed Chromium, `AutomationControlled`
-  disabled) → password + Google Authenticator TOTP accepted.
-- InnerTube test with the fresh cookies: `WEB: OK (1+20)`, `MWEB: OK (1+25)`.
-- Cloudflare: account created via Google SSO, API token via dashboard,
-  worker uploaded via REST API, `YT_COOKIES` set as a secret,
-  workers.dev route enabled, live `/unlock` test passed.
+Conclusion: since ~Nov 2026 YouTube requires a GVS PO Token for every WEB/MWEB
+stream URL. No server (worker, proxy, sandbox) can produce streamable URLs without
+minting a PO token. **A real browser context is the only token mint.**
 
-## Fallbacks (unchanged)
-On-device unlock ladder still runs when the worker is unreachable; the
-interactive Browser login (Settings → Account) refreshes local cookies; the
-headless auto-login remains as the last local option.
+## What v1.8.2 does
+1. **Cloud tier removed from the unlock ladder** — it can never stream anymore;
+   keeping it only burned ~15 s per age video. The worker stays deployed
+   (`sparktube-unlock.khadimsorder1.workers.dev`) with the fresh session secret for
+   diagnostics and future PO-token work; Settings keeps the URL field.
+2. **Dead headless AutoLogin removed everywhere** (resolve kickoff + all four
+   `ensureSignedIn` call sites + the 65 s forced refresh). It never completed once.
+3. **Interactive Browser login becomes the automatic fix path**: when the ladder
+   fails on an age-gated video, the app now launches the Browser login activity by
+   itself (once per 2 minutes) with a Bangla notice. After the user signs in once,
+   the WebView tier has a live session.
+4. **WebView tier = the streaming engine**: it runs a real browser context, mints
+   its own PO token, disables MSE to force a progressive itag-18 URL, captures the
+   page's deciphered media URL + in-page signed-in player response. Budgets bumped
+   (watch 22 s, embed 14 s, blocking 30 s) — age pages are slower.
+5. Error hint updated: `Settings → Account এ "Browser login" করুন (একবার)`.
+
+## User-facing flow after update
+18+ video → ladder fails → app auto-opens Browser login → user signs in (their own
+account, age-verified) → back to app → play the video again → WebView tier streams
+it directly. Non-age videos are unaffected (normal NewPipe path).

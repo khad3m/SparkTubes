@@ -41,7 +41,6 @@ import com.sparktube.app.data.YtRepository
 import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.net.YouTubeAuth
-import com.sparktube.app.net.YouTubeAutoLogin
 import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.net.ParallelRangeDataSource
 import com.sparktube.app.ui.widget.SparkTubeWidgetProvider
@@ -939,13 +938,11 @@ object PlaybackCenter {
         }
 
         setResolving(true)
-        // v1.7.11: start the automatic Google sign-in while the video
-        // resolves, so age-restricted videos never wait for a cold login
-        // start — the catch-path hooks then join this in-flight attempt.
-        YouTubeAutoLogin.kickoff(appContext)
-        com.sparktube.app.util.DiagnosticsLogger.log(
-            "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(first.url)} title=${first.title.take(60)}"
-        )
+                    // v1.8.2: the dead headless kickoff is removed — the age-gate
+                    // catch path opens the interactive Browser login instead.
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(first.url)} title=${first.title.take(60)}"
+                    )
         resolveJob = scope.launch {
             try {
                 val info = YtRepository.streamInfo(first.url)
@@ -975,11 +972,8 @@ object PlaybackCenter {
                     com.sparktube.app.util.DiagnosticsLogger.log(
                         "W", "Playback", "age-gate/unlock path vid=$vid reason=${e.message?.take(120) ?: e.javaClass.simpleName}"
                     )
-                    // v1.7.9: establish the Google session automatically (:ytauth)
-                    // before the age-gate unlock ladder runs.
-                    if (!YouTubeAuth.isLoggedIn()) {
-                        runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
-                    }
+                    // v1.8.2: browser-login prompt (if needed) happens inside
+                    // unlockWithSessionRefresh — the headless engine is dead.
                     // v1.7.14: refresh-first (ladder already ran inside streamInfo
                     // via ensurePlayable), WebView extraction last.
                     val direct = unlockWithSessionRefresh(vid, first.url)
@@ -1557,7 +1551,7 @@ object PlaybackCenter {
         }
 
         setResolving(true)
-        YouTubeAutoLogin.kickoff(appContext)
+        // v1.8.2: the dead headless kickoff is removed (see unlockWithSessionRefresh).
         com.sparktube.app.util.DiagnosticsLogger.log(
             "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(entry.url)} title=${entry.title.take(60)}"
         )
@@ -1609,11 +1603,8 @@ object PlaybackCenter {
                 if (e !is LiveContentException && !entry.url.startsWith("file://") && !usedSignedInRetry) {
                     usedSignedInRetry = true
                     val vid = DownloadCenter.videoIdOf(entry.url)
-                    // v1.7.9: automatic Google session establishment before the
-                    // signed-in unlock retry (:ytauth engine).
-                    if (!YouTubeAuth.isLoggedIn()) {
-                        runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
-                    }
+                    // v1.8.2: browser-login prompt (if needed) happens inside
+                    // unlockWithSessionRefresh — the headless engine is dead.
                     // v1.7.14: the unlock ladder already ran inside streamInfo
                     // (OkHttpDownloader's ensurePlayable intercepts the player
                     // response), so re-running it here wastes ~30 s before the
@@ -1659,74 +1650,40 @@ object PlaybackCenter {
     @Volatile private var lastForceRefreshAt: Long = 0L
 
     /**
-     * v1.7.14: the unlock ladder already runs inside streamInfo (OkHttpDownloader's
-     * ensurePlayable intercepts the player response), so re-running it in the catch
-     * wastes ~30 s before the session refresh ever starts. When a session exists
-     * but the ladder failed, the saved cookies are usually stale — force one fresh
-     * headless sign-in, then retry the unlock with the new cookies. Throttled to
-     * once per 2 minutes so un-unlockable videos never loop logins. Returns null →
-     * caller falls through to WebView extraction.
+     * v1.8.2: when a session exists but the ladder failed, the saved cookies are
+     * stale. The headless login engine is dead (proven across v1.7.14–v1.8.1
+     * logs: 30 s and 60 s budgets both time out), and server-resolved stream
+     * URLs are PO-token gated (HTTP 403 from any IP), so the only reliable
+     * fresh session comes from the interactive Browser login. Launch it once
+     * (throttled to once per 2 minutes); after the user signs in, the WebView
+     * tier mints its own PO token with that session and streams directly.
+     * Returns null → caller falls through to WebView extraction.
      */
-    private suspend fun unlockWithSessionRefresh(vid: String, url: String): StreamCatalog? {
-        if (!YouTubeAuth.isLoggedIn()) {
-            com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "no session — refresh skipped vid=$vid")
-            return null
-        }
+    private fun unlockWithSessionRefresh(vid: String, url: String): StreamCatalog? {
         val now = System.currentTimeMillis()
         if (now - lastForceRefreshAt < 2 * 60_000L) {
-            com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "refresh skipped (recent) vid=$vid")
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "browser login prompt skipped (recent) vid=$vid")
             return null
         }
         lastForceRefreshAt = now
         com.sparktube.app.util.DiagnosticsLogger.log(
-            "W", "Playback", "ladder failed while logged in — forcing session refresh vid=$vid"
+            "W", "Playback", "age-gate unlock failed — opening interactive Browser login vid=$vid"
         )
-        // v1.7.15: v1.7.14's helper logged a false "session refreshed" when the
-        // engine timed out at 30 s and only the STALE cookies satisfied
-        // isLoggedIn(). Use the engine's real Boolean result, give it 65 s to
-        // match the engine's 60 s internal budget, and log the elapsed time.
-        val t0 = System.currentTimeMillis()
-        val refreshedLogin = runCatching {
-            kotlinx.coroutines.withTimeoutOrNull(65_000L) {
-                YouTubeAutoLogin.ensureSignedIn(appContext, force = true)
-            }
-        }.getOrNull() == true
-        if (!refreshedLogin || !YouTubeAuth.isLoggedIn()) {
-            com.sparktube.app.util.DiagnosticsLogger.log(
-                "E", "Playback",
-                "forced re-login FAILED after ${System.currentTimeMillis() - t0}ms vid=$vid — no fresh session, stale cookies unusable"
-            )
-            return null
+        runCatching {
+            val intent = android.content.Intent(appContext, com.sparktube.app.ui.auth.YouTubeLoginActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            appContext.startActivity(intent)
+            notify { it.onNotice("18+ ফিক্স: Browser login খোলা হয়েছে — লগইন শেষ করে আবার ভিডিওতে চাপুন") }
+        }.onFailure {
+            com.sparktube.app.util.DiagnosticsLogger.log("E", "Playback", "browser login launch failed: ${it.message?.take(80)}")
         }
-        com.sparktube.app.util.DiagnosticsLogger.log(
-            "I", "Playback",
-            "fresh session confirmed in ${System.currentTimeMillis() - t0}ms — retrying unlock vid=$vid"
-        )
-        val json = kotlinx.coroutines.withContext(Dispatchers.IO) {
-            YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
-        } ?: run {
-            com.sparktube.app.util.DiagnosticsLogger.log(
-                "E", "Playback",
-                "unlock after refresh FAIL vid=$vid — if every signed-in client still says 'Sign in to confirm your age' with fresh cookies, the Google account itself is not age-verified (verify at youtube.com)"
-            )
-            return null
-        }
-        val refreshed = kotlinx.coroutines.withContext(Dispatchers.IO) {
-            runCatching {
-                StreamCatalog.fromPlayerJson(YouTubePlayerUnlock.deobfuscateAndNormalize(json, vid), url)
-            }.getOrNull()
-        }
-        com.sparktube.app.util.DiagnosticsLogger.log(
-            if (refreshed != null) "I" else "E", "Playback",
-            "unlock after refresh ${if (refreshed != null) "OK" else "FAIL"} vid=$vid"
-        )
-        return refreshed
+        return null
     }
 
     /**
-     * v1.8.1: age-gated failures get actionable guidance. The cloud tier ships
-     * pre-configured and is tried automatically; this message tells the user
-     * where to look (Diagnostics) and the fallback (browser login refresh).
+     * v1.8.2: age-gated failures get actionable guidance. Server-resolved URLs
+     * are PO-token gated, so the working path is: interactive Browser login
+     * (once) → the WebView tier mints its own PO token and streams directly.
      */
     private fun withAgeGateHint(e: Throwable): String {
         val base = if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message.orEmpty()
@@ -1735,7 +1692,7 @@ object PlaybackCenter {
             base.contains("sign in", ignoreCase = true) ||
             base.contains("login", ignoreCase = true)
         if (!isAgeGate) return base
-        return "$base — 18+ ফিক্স: Cloud unlock স্বয়ংক্রিয়ভাবে চেষ্টা করে। Diagnostics Log-এ \"cloud tier\" লাইন দেখুন; সমস্যা হলে Settings → Account এ \"Browser login\" দিয়ে fresh session নিন"
+        return "$base — 18+ ফিক্স: Settings → Account এ \"Browser login\" করুন (একবার) — এরপর সব 18+ ভিডিও সরাসরি চলবে"
     }
 
     private fun skipBrokenPlaylistItem(): Boolean {
@@ -1757,7 +1714,7 @@ object PlaybackCenter {
             return
         }
         setResolving(true)
-        YouTubeAutoLogin.kickoff(appContext)
+        // v1.8.2: the dead headless kickoff is removed (see unlockWithSessionRefresh).
         com.sparktube.app.util.DiagnosticsLogger.log(
             "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(entry.url)} title=${entry.title.take(60)}"
         )
@@ -1800,11 +1757,8 @@ object PlaybackCenter {
             } catch (e: Exception) {
                 if (e !is LiveContentException && !entry.url.startsWith("file://")) {
                     val vid = DownloadCenter.videoIdOf(entry.url)
-                    // v1.7.9: automatic Google session establishment before the
-                    // age-gate unlock ladder (:ytauth engine).
-                    if (!YouTubeAuth.isLoggedIn()) {
-                        runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
-                    }
+                    // v1.8.2: browser-login prompt (if needed) happens inside
+                    // unlockWithSessionRefresh — the headless engine is dead.
                     // v1.7.14: refresh-first (ladder already ran inside streamInfo),
                     // WebView extraction last.
                     val direct = unlockWithSessionRefresh(vid, entry.url)
@@ -2326,10 +2280,8 @@ object PlaybackCenter {
             if (err is LiveContentException) throw err
             val vid = DownloadCenter.videoIdOf(entry.url)
             val direct = kotlinx.coroutines.runBlocking {
-                // v1.7.9: automatic Google session establishment for the audio path.
-                if (!YouTubeAuth.isLoggedIn()) {
-                    runCatching { kotlinx.coroutines.withTimeoutOrNull(30_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
-                }
+                // v1.8.2: the headless engine is dead — audio path relies on the
+                // ladder + WebView tier; browser-login prompt runs via the video path.
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
                 }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }

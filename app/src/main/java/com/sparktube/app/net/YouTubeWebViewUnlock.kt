@@ -43,15 +43,15 @@ object YouTubeWebViewUnlock {
     suspend fun extractPlayerJson(context: Context, videoId: String): JSONObject? {
         if (videoId.isBlank()) return null
         return withTimeoutOrNull(24_000L) {
-            runPage(context, videoId, watchUrl(videoId), 14_000L)
-                ?: runPage(context, videoId, embedUrl(videoId), 9_000L)
+            runPage(context, videoId, watchUrl(videoId), 22_000L)
+                ?: runPage(context, videoId, embedUrl(videoId), 14_000L)
         }
     }
 
     /**
      * Synchronous helper called from background IO threads inside `YouTubePlayerUnlock.fetchUnlockedPlayerJson`.
      */
-    fun extractPlayerJsonBlocking(videoId: String, timeoutMs: Long = 20_000L): JSONObject? {
+    fun extractPlayerJsonBlocking(videoId: String, timeoutMs: Long = 30_000L): JSONObject? {
         if (videoId.isBlank() || Looper.myLooper() == Looper.getMainLooper()) return null
         val ctx = runCatching { PlaybackCenter.appContext }.getOrNull() ?: return null
         val ref = AtomicReference<JSONObject?>(null)
