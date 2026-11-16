@@ -202,9 +202,6 @@ object AppPrefs {
         set(value) {
             if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_COOKIES, value).apply()
         }
-        set(value) {
-            if (this::sp.isInitialized) sp.edit().putString(KEY_WORKER_URL, value).apply()
-        }
 
     /** Display label (email or status) for the signed-in Google/YouTube account. */
     var youtubeAccountLabel: String

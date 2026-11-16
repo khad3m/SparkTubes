@@ -333,7 +333,7 @@ class SettingsPageActivity : AppCompatActivity() {
                     },
                     GridItem(R.drawable.ic_delete, getString(R.string.menu_clear_data), "Cache · History") {
                         showClearDataSheet()
-                    }
+                    },
                     GridItem(R.drawable.ic_delete, "Cache guard", cacheSummary()) {
                         confirmCacheClear()
                     }
