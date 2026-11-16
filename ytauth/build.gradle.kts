@@ -21,5 +21,8 @@ android {
     }
 }
 
-// Zero external dependencies: only the Android framework (WebView, Keystore, javax.crypto)
-// so the library adds no supply-chain or version-conflict risk to the app build.
+// Only dependency: kotlinx-coroutines-core for the suspend-based engine API
+// (same version the app already uses — no new supply chain, no version conflicts).
+dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+}

@@ -18,7 +18,7 @@ object Totp {
         if (clean.isEmpty()) throw IllegalArgumentException("empty base32 secret")
         var bits = 0
         var value = 0
-        val out = ArrayList<Byte>(clean.size * 5 / 8)
+        val out = ArrayList<Byte>(clean.length * 5 / 8)
         for (ch in clean) {
             value = (value shl 5) or ALPHABET.indexOf(ch)
             bits += 5
