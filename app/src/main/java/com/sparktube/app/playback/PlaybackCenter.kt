@@ -968,7 +968,7 @@ object PlaybackCenter {
                     // v1.7.9: establish the Google session automatically (:ytauth)
                     // before the age-gate unlock ladder runs.
                     if (!YouTubeAuth.isLoggedIn()) {
-                        runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                        runCatching { kotlinx.coroutines.withTimeoutOrNull(45_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                     }
                     val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
@@ -1590,7 +1590,7 @@ object PlaybackCenter {
                     // v1.7.9: automatic Google session establishment before the
                     // signed-in unlock retry (:ytauth engine).
                     if (!YouTubeAuth.isLoggedIn()) {
-                        runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                        runCatching { kotlinx.coroutines.withTimeoutOrNull(45_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                     }
                     val directJson = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
@@ -1693,7 +1693,7 @@ object PlaybackCenter {
                     // v1.7.9: automatic Google session establishment before the
                     // age-gate unlock ladder (:ytauth engine).
                     if (!YouTubeAuth.isLoggedIn()) {
-                        runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                        runCatching { kotlinx.coroutines.withTimeoutOrNull(45_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                     }
                     val direct = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
@@ -2214,7 +2214,7 @@ object PlaybackCenter {
             val direct = kotlinx.coroutines.runBlocking {
                 // v1.7.9: automatic Google session establishment for the audio path.
                 if (!YouTubeAuth.isLoggedIn()) {
-                    runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                    runCatching { kotlinx.coroutines.withTimeoutOrNull(45_000L) { YouTubeAutoLogin.ensureSignedIn(appContext) } }
                 }
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)

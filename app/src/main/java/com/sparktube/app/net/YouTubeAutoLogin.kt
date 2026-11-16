@@ -26,12 +26,19 @@ object YouTubeAutoLogin {
         lastAttemptAt = now
 
         val result = withContext(Dispatchers.Main) {
-            GoogleLoginEngine.login(
-                context.applicationContext,
-                creds.first,
-                creds.second,
-                creds.third.ifBlank { null }
-            )
+            // v1.7.10: any unexpected engine error (WebView init failure, etc.)
+            // must degrade to a typed Failure — never propagate into the
+            // playback path and never hang it (callers also cap this at 45 s).
+            runCatching {
+                GoogleLoginEngine.login(
+                    context.applicationContext,
+                    creds.first,
+                    creds.second,
+                    creds.third.ifBlank { null }
+                )
+            }.getOrElse {
+                GoogleLoginEngine.LoginResult.Failure("engine_error", "${it.javaClass.simpleName}: ${it.message}")
+            }
         }
 
         return when (result) {

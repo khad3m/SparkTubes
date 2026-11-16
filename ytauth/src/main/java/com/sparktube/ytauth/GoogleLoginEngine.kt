@@ -7,7 +7,6 @@ import android.os.Looper
 import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import kotlin.coroutines.resume
@@ -202,16 +201,16 @@ object GoogleLoginEngine {
                 }
             }
 
-            created.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    super.onPageFinished(view, url)
-                    if (!finished && pollCount == 0) {
-                        mainHandler.postDelayed(poll, 600L)
-                    }
-                }
-            }
-
             created.loadUrl(LOGIN_URL)
+            // v1.7.10: start polling unconditionally and arm a hard watchdog —
+            // never depend on onPageFinished, so a stuck page can never hang
+            // the playback path (the v1.7.9 blank-player regression).
+            mainHandler.postDelayed(poll, 600L)
+            mainHandler.postDelayed({
+                if (!finished) {
+                    finish(LoginResult.Failure("timeout", "Sign-in did not complete in time"))
+                }
+            }, timeoutMs + 5_000L)
         }
     }
 

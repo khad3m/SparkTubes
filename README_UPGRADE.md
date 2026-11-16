@@ -1,38 +1,45 @@
-# SparkTube v1.7.9 — `:ytauth` Library: Automatic Google Sign-in + Auto-Playing Age-Restricted Videos (`versionCode = 32`)
+# SparkTube v1.7.10 — Blank Player Page Fix: Bounded Auto-Login, Hard Watchdog, Guaranteed Error Surface (`versionCode = 33`)
 
-## What's New
-A dedicated in-repo library module **`:ytauth`** (zero external dependencies) now handles
-Google login end-to-end and feeds the session straight into the player:
+## Root Cause (v1.7.9 regression)
+Clicking a video from search could leave the player page **completely blank — no info,
+no error, no playback**. Root-cause audit found a hang chain, not a UI bug:
 
-1. **`Totp` (RFC 6238)** — generates 2FA verification codes from the account's Base32
-   secret with a compact built-in Base32 decoder (HMAC-SHA1, 6 digits, 30 s step).
-2. **`SecureStore`** — Android-Keystore-backed AES-256/GCM key-value store; Google
-   credentials never touch the repo, the APK, or plain prefs.
-3. **`GoogleLoginEngine`** — headless WebView that signs in exactly like a browser:
-   email → password → 2FA (TOTP auto-filled from the secret) → redirect to YouTube →
-   captures the full session cookie set (SID/HSID/SSID/SAPISID/__Secure-1PSID/
-   __Secure-3PSID/…). Stage machine handles "Choose an account", bad-password and
-   phone-approval challenges with clear typed failures.
-4. **Auto-Playing Age-Restricted Videos** — when an 18+ video hits the age gate and
-   there is no session, `PlaybackCenter` now calls `YouTubeAutoLogin.ensureSignedIn()`
-   (throttled, one headless attempt per 10 min) on **all four** age-gate fallback paths
-   (video catch, signed-in retry, audio catch, music URI resolution), then re-runs the
-   signed-in unlock ladder (WEB / WEB_CREATOR / TV-embed / MWEB + SAPISIDHASH +
-   X-Goog-Visitor-Id) and plays automatically.
-5. **Auto Sign-in screen** — Menu → Google Account (and Settings → YouTube / Google
-   Account) now opens the new **Auto Sign-in** activity: enter the Google email,
-   password and 2FA secret once (stored Keystore-encrypted on the device); the manual
-   browser login stays available via a button on the same screen.
+1. YouTube is now tightening unauthenticated player requests (InnerTube probes return
+   `LOGIN_REQUIRED` for normal videos), so ordinary playback failures became common and
+   carried "sign in"-style messages.
+2. Those failures routed into the v1.7.9 automatic sign-in hook.
+3. The `:ytauth` `GoogleLoginEngine` started its poll **only from `onPageFinished`**
+   with no watchdog — if that callback never fired (stuck page, dead renderer), the
+   suspend continuation never resumed, no timeout ever fired.
+4. The playback coroutine stayed suspended forever: `finally { setResolving(false) }`
+   never ran, `notify { it.onError(...) }` never ran → **blank player, silent**.
 
-## Security Notes
-- Credentials are entered in-app and stored **encrypted on the device only**
-  (Android Keystore, AES-256/GCM). They are **not** embedded in the source code,
-  the APK, or this repository.
-- Use a dedicated Google account for the app; if Google asks for phone approval
-  (device-level challenge), approve it once or use the manual login flow.
+## Fixes
+1. **Engine watchdog (no hang path possible)** — `GoogleLoginEngine` now starts its
+   stage poll unconditionally 600 ms after `loadUrl` (independent of page callbacks)
+   and arms a hard watchdog at `timeout + 5 s` that always finishes the login attempt
+   with a typed `timeout` failure. A stuck page can no longer hang any caller.
+2. **Bounded playback path** — all four `ensureSignedIn` hooks in `PlaybackCenter`
+   are wrapped in `withTimeoutOrNull(45 s)`: even a worst-case auto-login adds at
+   most 45 s, then the ladder/error path proceeds as before.
+3. **Engine errors can never propagate** — `YouTubeAutoLogin.ensureSignedIn` wraps the
+   engine call in `runCatching`, degrading any unexpected exception (WebView init
+   failure, renderer crash) into a typed `engine_error` failure.
+4. **Error surface guaranteed** — with the hang removed, the existing catch-path
+   `notify { it.onError(...) }` always executes, so any remaining failure (bad
+   credentials, Google phone-approval challenge, API rejection) now shows a visible
+   message instead of silence.
+
+## Result
+- Normal videos play exactly as before (hooks only engage on failures).
+- Age-restricted / sign-in-required videos attempt the automatic Google session
+  (bounded at 45 s) and then play via the signed-in unlock ladder — or show a clear
+  error instead of a blank page.
+- Auto Sign-in screen (Menu → Google Account) is unchanged: enter the Google email,
+  password and 2FA secret once; credentials stay Keystore-encrypted on the device.
 
 ## Build & Release
 ```bash
 ./gradlew assembleRelease
-# GitHub: tag v1.7.9 → CI builds the signed release APK
+# GitHub: tag v1.7.10 → CI builds the signed release APK
 ```
