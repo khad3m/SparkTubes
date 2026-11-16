@@ -68,17 +68,19 @@ object YouTubeAutoLogin {
     private suspend fun performLogin(context: Context): Boolean {
         val creds = YouTubeAuth.storedCredentials(context) ?: return false
         val result = withContext(Dispatchers.Main) {
-            com.sparktube.app.util.DiagnosticsLogger.log("I", "AutoLogin", "attempt email=${creds.first.take(1)}*** timeout=30s")
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "AutoLogin", "attempt email=${creds.first.take(1)}*** timeout=60s")
             // Any unexpected engine error degrades to a typed Failure; the
-            // whole attempt is bounded at 30 s so the playback path can
-            // never hang (watchdog in :ytauth is the backstop).
+            // whole attempt is bounded at 60 s (v1.7.15: 30 s was measured as
+            // too short on low-end devices — the engine never finished) so
+            // the playback path can never hang (watchdog in :ytauth is the
+            // backstop).
             runCatching {
                 GoogleLoginEngine.login(
                     context,
                     creds.first,
                     creds.second,
                     creds.third.ifBlank { null },
-                    timeoutMs = 30_000L
+                    timeoutMs = 60_000L
                 )
             }.getOrElse {
                 GoogleLoginEngine.LoginResult.Failure(

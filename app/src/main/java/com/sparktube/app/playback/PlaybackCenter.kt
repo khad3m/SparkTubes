@@ -1681,20 +1681,34 @@ object PlaybackCenter {
         com.sparktube.app.util.DiagnosticsLogger.log(
             "W", "Playback", "ladder failed while logged in — forcing session refresh vid=$vid"
         )
-        runCatching {
-            kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+        // v1.7.15: v1.7.14's helper logged a false "session refreshed" when the
+        // engine timed out at 30 s and only the STALE cookies satisfied
+        // isLoggedIn(). Use the engine's real Boolean result, give it 65 s to
+        // match the engine's 60 s internal budget, and log the elapsed time.
+        val t0 = System.currentTimeMillis()
+        val refreshedLogin = runCatching {
+            kotlinx.coroutines.withTimeoutOrNull(65_000L) {
                 YouTubeAutoLogin.ensureSignedIn(appContext, force = true)
             }
-        }
-        if (!YouTubeAuth.isLoggedIn()) {
-            com.sparktube.app.util.DiagnosticsLogger.log("E", "Playback", "session refresh FAILED vid=$vid")
+        }.getOrNull() == true
+        if (!refreshedLogin || !YouTubeAuth.isLoggedIn()) {
+            com.sparktube.app.util.DiagnosticsLogger.log(
+                "E", "Playback",
+                "forced re-login FAILED after ${System.currentTimeMillis() - t0}ms vid=$vid — no fresh session, stale cookies unusable"
+            )
             return null
         }
-        com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "session refreshed — retrying unlock vid=$vid")
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "I", "Playback",
+            "fresh session confirmed in ${System.currentTimeMillis() - t0}ms — retrying unlock vid=$vid"
+        )
         val json = kotlinx.coroutines.withContext(Dispatchers.IO) {
             YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
         } ?: run {
-            com.sparktube.app.util.DiagnosticsLogger.log("E", "Playback", "unlock after refresh FAIL vid=$vid")
+            com.sparktube.app.util.DiagnosticsLogger.log(
+                "E", "Playback",
+                "unlock after refresh FAIL vid=$vid — if every signed-in client still says 'Sign in to confirm your age' with fresh cookies, the Google account itself is not age-verified (verify at youtube.com)"
+            )
             return null
         }
         val refreshed = kotlinx.coroutines.withContext(Dispatchers.IO) {

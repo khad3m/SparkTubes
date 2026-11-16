@@ -1,53 +1,48 @@
-# SparkTube v1.7.14 — Refresh-First Unlock Flow + Per-Client Failure Reasons (`versionCode = 37`)
+# SparkTube v1.7.15 — Login Engine Budget Raised to 60 s + Real Re-Login Result Logging (`versionCode = 38`)
 
-## What the Second Diagnostics Log Showed (v1.7.13 on device)
-The new trail worked (every resolve and unlock tier now logged) and exposed two
-remaining problems precisely:
+## What the Third Diagnostics Log Proved (v1.7.14 on device, decisive)
+1. **Refresh-first flow works**: `forcing session refresh` now fires ~1 s after
+   ladder failure, per-client reasons are logged.
+2. **The re-login never completes**: `attempt email=k*** timeout=30s` at
+   16:23:09.271 → `session refreshed` at 16:23:39.056 = exactly the 30 s window,
+   with NO `success cookieHeaderLen=…` line. The headless Google login on this
+   low-end device (SM-A107F, Android 11, BD network) needs more than 30 s.
+3. **The helper false-positived**: after the timeout it checked
+   `isLoggedIn()` — the stale cookies satisfy that check — and logged
+   "session refreshed" even though no fresh session landed. (The second
+   refresh was cancelled mid-login by the next tap and false-positived the
+   same way.)
+4. Consequently every signed-in client still answered
+   `status=LOGIN_REQUIRED reason=Sign in to confirm your age` — but we cannot
+   yet conclude whether the account itself is age-unverified, because no
+   genuinely fresh session has ever been tested.
 
-1. **`forcing session refresh` never fired.** The age-gate catch still re-ran the
-   unlock ladder first (~28 s), then the slow WebView tier (~30–60 s) — the forced
-   session refresh sat at the END of that chain. In every logged attempt the user
-   had already tapped the next video (resolve cancelled) or the copy cut off
-   before the refresh ever started. Deadlock again: right fix, wrong order.
-2. **Web clients failed in 3–4 s with zero visibility** — `fetchFallbackPlayer`
-   swallowed both HTTP errors (`return null` on `!isSuccessful`) and 200 responses
-   carrying `playabilityStatus: LOGIN_REQUIRED`. Impossible to tell from the log
-   whether the saved session is stale (refresh will fix) or the Google account
-   itself is not age-verified (no app fix possible).
+## Fixes (v1.7.15)
+1. **Login engine budget 30 s → 60 s** (`timeoutMs = 60_000L`) — measured
+   too short on low-end devices.
+2. **Real result logging in the refresh flow**: the helper now uses
+   `ensureSignedIn`'s Boolean return (65 s wait to cover the engine's 60 s
+   budget). Fresh session confirmed → `fresh session confirmed in <ms>ms —
+   retrying unlock`. Timeout/cancel/failure → `forced re-login FAILED after
+   <ms>ms — no fresh session, stale cookies unusable`. No more false
+   "session refreshed".
+3. **Self-contained final verdict**: if a CONFIRMED fresh session still fails
+   the unlock, the log states it outright — "…if every signed-in client still
+   says 'Sign in to confirm your age' with fresh cookies, the Google account
+   itself is not age-verified (verify at youtube.com)".
 
-## Fixes (v1.7.14)
-1. **Refresh-first unlock flow** (both age-gate catch paths): the redundant
-   ladder re-run is removed — it already executes inside `streamInfo` via
-   OkHttpDownloader's `ensurePlayable` interception. The catch now goes:
-   forced session refresh + unlock retry (fresh cookies, ~30 s cap) → WebView
-   extraction last. The refresh now actually starts within ~1 s of ladder
-   failure, so a cancelled next tap can no longer starve it.
-2. **`no session — refresh skipped`** logged when no session exists (trail is
-   complete for signed-out cases too).
-3. **Per-client failure reasons**: every unlock client that fails now logs
-   `client <NAME> HTTP <code>` (auth on/off) and every non-OK `playabilityStatus`
-   logs `client <NAME> status=… reason=…` — e.g. `Sign in to confirm your age`
-   (stale session) vs `This video may be inappropriate for some users`
-   (account needs age verification). The next log will state the exact cause
-   in plain text.
-
-## Expected Log Flow Now (18+ video, logged in)
-```
-resolve vid=… title=…
-unlock start vid=… loggedIn=true
-client WEB status=LOGIN_REQUIRED reason=Sign in to confirm your age   ← decisive
-web-client tiers exhausted …
-ladder failed while logged in — forcing session refresh vid=…
-attempt email=a***…
-success cookieHeaderLen=…
-session refreshed — retrying unlock vid=…
-client unlock OK vid=…     ← if the session was the problem
-```
-If the reasons instead say age-verification-required for every signed-in client,
-the account itself must be verified on YouTube — the log will prove it.
+## The Decision Tree This Log Will Resolve
+- `success cookieHeaderLen=…` then `client unlock OK` → stale session was the
+  whole problem; fixed for good.
+- `success cookieHeaderLen=…` then all clients still
+  `Sign in to confirm your age` → **the Google account is not age-verified** —
+  verification must be done on the account (youtube.com → Settings → age
+  verification), no app change can bypass that.
+- `forced re-login FAILED` → login itself is blocked (risk wall / network);
+  the engine's `failed kind=… msg=…` line shows why.
 
 ## Build & Release
 ```bash
 ./gradlew assembleRelease
-# GitHub: tag v1.7.14 → CI builds the signed release APK
+# GitHub: tag v1.7.15 → CI builds the signed release APK
 ```
