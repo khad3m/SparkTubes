@@ -2211,11 +2211,11 @@ object PlaybackCenter {
         }.getOrElse { err ->
             if (err is LiveContentException) throw err
             val vid = DownloadCenter.videoIdOf(entry.url)
-            // v1.7.9: automatic Google session establishment for the audio path.
-            if (!YouTubeAuth.isLoggedIn()) {
-                runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
-            }
             val direct = kotlinx.coroutines.runBlocking {
+                // v1.7.9: automatic Google session establishment for the audio path.
+                if (!YouTubeAuth.isLoggedIn()) {
+                    runCatching { YouTubeAutoLogin.ensureSignedIn(appContext) }
+                }
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
                 }?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
