@@ -2,8 +2,6 @@ package com.sparktube.app.net
 
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.DiagnosticsLogger
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -31,16 +29,20 @@ object CloudUnlockClient {
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    /** Raw InnerTube player JSON from the worker, or null. Caller validates playability. */
-    suspend fun fetchPlayerJson(videoId: String): JSONObject? = withContext(Dispatchers.IO) {
+    /**
+     * Raw InnerTube player JSON from the worker, or null. Caller validates playability.
+     * Blocking call — invoke from an IO context (fetchUnlockedPlayerJson's callers
+     * already wrap it in Dispatchers.IO / runBlocking, same as fetchFallbackPlayer).
+     */
+    fun fetchPlayerJson(videoId: String): JSONObject? {
         val base = AppPrefs.workerUrl.trim()
-        if (base.isBlank() || !base.startsWith("https://")) return@withContext null
+        if (base.isBlank() || !base.startsWith("https://")) return null
         val cookies = AppPrefs.youtubeCookies
         if (cookies.isBlank()) {
             DiagnosticsLogger.log("W", "Cloud", "no session cookies — worker skipped vid=$videoId")
-            return@withContext null
+            return null
         }
-        runCatching {
+        return runCatching {
             val req = Request.Builder()
                 .url("$base/unlock?v=$videoId&gl=${AppPrefs.countryOrDefault}")
                 .header("X-Cookies", cookies)
