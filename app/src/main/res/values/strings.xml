@@ -23,6 +23,13 @@
     <string name="trending_in">Suggested in %1$s %2$s</string>
     <string name="crash_test_desc">Test crash</string>
     <string name="chip_hindi_trending">Hindi Trending Songs</string>
+    <string name="diag_title">Diagnostics Log</string>
+    <string name="diag_copy">Copy</string>
+    <string name="diag_share">Share</string>
+    <string name="diag_clear">Clear</string>
+    <string name="diag_copied">Log copied</string>
+    <string name="diag_cleared">Log cleared</string>
+    <string name="diag_grid_sub">Tap to view / share</string>
     <string name="chip_bangla_natok">Bangla Natok</string>
     <string name="chip_lofi">Lofi Song</string>
     <string name="chip_item_song">Item Song</string>

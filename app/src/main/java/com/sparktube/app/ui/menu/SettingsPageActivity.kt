@@ -334,6 +334,9 @@ class SettingsPageActivity : AppCompatActivity() {
                     GridItem(R.drawable.ic_crash_test, getString(R.string.settings_crash_logs), "${crashLogCountLabel()} logs") {
                         showCrashLogsSheet()
                     },
+                    GridItem(R.drawable.ic_info, getString(R.string.diag_title), getString(R.string.diag_grid_sub)) {
+                        DiagnosticsActivity.start(this@SettingsPageActivity)
+                    },
                     GridItem(R.drawable.ic_delete, getString(R.string.menu_clear_data), "Cache · History") {
                         showClearDataSheet()
                     }

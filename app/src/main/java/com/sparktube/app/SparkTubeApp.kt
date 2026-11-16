@@ -32,6 +32,9 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
         // now written to a "SparkTube" folder on the user's device instead;
         // see util/CrashReporter.kt and Settings → Crash logs.
         CrashReporter.install(this)
+        // v1.7.12: full diagnostics trail (browse/search/playback/login) —
+        // exported via Settings → Diagnostics log for exact-reason debugging.
+        com.sparktube.app.util.DiagnosticsLogger.install(this)
 
         AppPrefs.init(this)
         DeviceTuning.init(this)

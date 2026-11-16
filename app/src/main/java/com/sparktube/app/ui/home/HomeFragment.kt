@@ -190,6 +190,7 @@ class HomeFragment : Fragment(), ScrollsToTop {
             showSkeleton(b.list, SkeletonAdapter.STYLE_VIDEO, count = 8)
             try {
                 val items = YtRepository.searchVideos(catQuery, null).items
+                com.sparktube.app.util.DiagnosticsLogger.log("I", "Home", "category='$catQuery' items=${items.size}")
                 b.list.alpha = 0f
                 b.list.adapter = adapter
                 adapter.submitList(items.map { it.toUiModel() })
@@ -202,6 +203,9 @@ class HomeFragment : Fragment(), ScrollsToTop {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "E", "Home", "load FAIL cat='$catQuery' ${e.javaClass.simpleName}: ${e.message?.take(150) ?: ""}"
+                )
                 b.list.adapter = adapter
                 adapter.submitList(emptyList())
                 b.errorText.text = Formatters.friendlyException(e)

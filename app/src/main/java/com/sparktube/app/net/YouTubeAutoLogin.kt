@@ -33,11 +33,15 @@ object YouTubeAutoLogin {
      */
     fun kickoff(context: Context) {
         if (YouTubeAuth.isLoggedIn()) return
-        if (YouTubeAuth.storedCredentials(context) == null) return
+        if (YouTubeAuth.storedCredentials(context) == null) {
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "AutoLogin", "kickoff skipped: no saved credentials")
+            return
+        }
         val now = System.currentTimeMillis()
         if (now - lastAttemptAt < 10 * 60_000L) return
         if (inFlight?.isActive == true) return
         lastAttemptAt = now
+        com.sparktube.app.util.DiagnosticsLogger.log("I", "AutoLogin", "kickoff: starting pre-play background login")
         inFlight = GlobalScope.launch(Dispatchers.Main) {
             runCatching { performLogin(context.applicationContext) }
         }
@@ -64,6 +68,7 @@ object YouTubeAutoLogin {
     private suspend fun performLogin(context: Context): Boolean {
         val creds = YouTubeAuth.storedCredentials(context) ?: return false
         val result = withContext(Dispatchers.Main) {
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "AutoLogin", "attempt email=${creds.first.take(1)}*** timeout=30s")
             // Any unexpected engine error degrades to a typed Failure; the
             // whole attempt is bounded at 30 s so the playback path can
             // never hang (watchdog in :ytauth is the backstop).
@@ -87,12 +92,18 @@ object YouTubeAutoLogin {
             is GoogleLoginEngine.LoginResult.Success -> {
                 YouTubeAuth.saveCookies(result.cookies, result.account)
                 lastError = null
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "I", "AutoLogin", "success cookies=${result.cookies.size} account=${result.account.take(40)}"
+                )
                 runCatching { YouTubeAuth.visitorData() }
                 true
             }
 
             is GoogleLoginEngine.LoginResult.Failure -> {
                 lastError = "${result.kind}: ${result.message}"
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "E", "AutoLogin", "failed kind=${result.kind} msg=${result.message.take(150)}"
+                )
                 false
             }
         }

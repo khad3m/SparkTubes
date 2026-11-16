@@ -296,7 +296,22 @@ object YtRepository {
         }
 
     /** Video search. Live results are stripped before they reach the UI. */
-    suspend fun searchVideos(query: String, page: Page? = null): PageResult =
+    suspend fun searchVideos(query: String, page: Page? = null): PageResult = try {
+        searchVideosInternal(query, page).also {
+            com.sparktube.app.util.DiagnosticsLogger.log(
+                "I", "Search", "q='$query' page=${page?.id ?: "1"} items=${it.items.size}"
+            )
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "E", "Search", "FAIL q='$query' ${e.javaClass.simpleName}: ${e.message?.take(200) ?: ""}"
+        )
+        throw e
+    }
+
+    private suspend fun searchVideosInternal(query: String, page: Page? = null): PageResult =
         withContext(Dispatchers.IO) {
             NewPipe.setPreferredContentCountry(ContentCountry(AppPrefs.countryOrDefault))
             val handler = service.searchQHFactory.fromQuery(
@@ -619,7 +634,24 @@ object YtRepository {
     }
 
     /** Full stream details for playback (with automatic Multi-Client InnerTube & Google Auth fallback). */
-    suspend fun streamInfo(url: String): StreamInfo =
+    suspend fun streamInfo(url: String): StreamInfo = try {
+        streamInfoInternal(url).also {
+            com.sparktube.app.util.DiagnosticsLogger.log(
+                "I", "StreamInfo",
+                "ok ${url.takeLast(30)} streams=${it.audioStreams.size}+${it.videoStreams.size} dur=${it.duration}s"
+            )
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "E", "StreamInfo",
+            "FAIL ${url.takeLast(30)} ${e.javaClass.simpleName}: ${e.message?.take(200) ?: ""}"
+        )
+        throw e
+    }
+
+    private suspend fun streamInfoInternal(url: String): StreamInfo =
         withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
             synchronized(streamInfoCache) {

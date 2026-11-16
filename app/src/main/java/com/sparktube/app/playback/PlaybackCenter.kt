@@ -943,6 +943,9 @@ object PlaybackCenter {
         // resolves, so age-restricted videos never wait for a cold login
         // start — the catch-path hooks then join this in-flight attempt.
         YouTubeAutoLogin.kickoff(appContext)
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(first.url)} title=${first.title.take(60)}"
+        )
         resolveJob = scope.launch {
             try {
                 val info = YtRepository.streamInfo(first.url)
@@ -969,6 +972,9 @@ object PlaybackCenter {
                     msg.contains("age") || msg.contains("anonymously") || msg.contains("sign in") || msg.contains("login")
                 if (ageGated && !first.url.startsWith("file://")) {
                     val vid = DownloadCenter.videoIdOf(first.url)
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        "W", "Playback", "age-gate/unlock path vid=$vid reason=${e.message?.take(120) ?: e.javaClass.simpleName}"
+                    )
                     // v1.7.9: establish the Google session automatically (:ytauth)
                     // before the age-gate unlock ladder runs.
                     if (!YouTubeAuth.isLoggedIn()) {
@@ -980,6 +986,10 @@ object PlaybackCenter {
                         ?: com.sparktube.app.net.YouTubeWebViewUnlock.extractPlayerJson(appContext, vid)
                             ?.let { YouTubePlayerUnlock.deobfuscateAndNormalize(it, vid) }
                             ?.let { StreamCatalog.fromPlayerJson(it, first.url) }
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        if (direct != null) "I" else "E", "Playback",
+                        "unlock ladder ${if (direct != null) "OK" else "FAIL"} vid=$vid"
+                    )
                     if (direct != null && currentEntry?.url == first.url) {
                         catalog = direct
                         LocalStore.addToMusicHistory(appContext, first.toVideoEntry())
@@ -996,6 +1006,10 @@ object PlaybackCenter {
                 if (e is LiveContentException) {
                     notify { it.onLiveContentBlocked() }
                 } else {
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        "E", "Playback",
+                        "player error msg=${e.message?.take(150) ?: e.javaClass.simpleName}"
+                    )
                     notify { it.onError(if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message!!) }
                 }
             } finally {
@@ -1726,6 +1740,10 @@ object PlaybackCenter {
                 if (e is LiveContentException) {
                     notify { it.onLiveContentBlocked() }
                 } else {
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        "E", "Playback",
+                        "player error msg=${e.message?.take(150) ?: e.javaClass.simpleName}"
+                    )
                     notify { it.onError(if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message!!) }
                 }
             } finally {
