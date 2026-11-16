@@ -61,7 +61,7 @@ object DownloadCenter {
     const val STATUS_FAILED = "FAILED"
 
     /** Parallel connections per file (acceleration factor). */
-    private fun threadsPerFile(): Int = DeviceTuning.downloadThreads(appCtx)
+    private fun threadsPerFile(): Int = appCtx?.let { DeviceTuning.downloadThreads(it) } ?: 3
 
     /** Minimum file size (bytes) below which parallel splitting is pointless. */
     private const val MIN_SIZE_FOR_SPLIT = 2L * 1024L * 1024L

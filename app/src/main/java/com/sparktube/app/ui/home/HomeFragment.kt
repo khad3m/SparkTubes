@@ -25,6 +25,7 @@ import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.ui.ScrollsToTop
 import com.sparktube.app.ui.common.SkeletonAdapter
 import com.sparktube.app.ui.common.showSkeleton
+import com.sparktube.app.ui.common.toEntry
 import com.sparktube.app.ui.common.toQueueEntry
 import com.sparktube.app.ui.common.toUiModel
 import com.sparktube.app.ui.common.VideoAdapter

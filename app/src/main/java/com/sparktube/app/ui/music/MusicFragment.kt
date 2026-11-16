@@ -582,11 +582,11 @@ class MusicFragment : Fragment(), ScrollsToTop {
                     "favorites" -> {
                         val favs = LocalStore.musicFavorites(requireContext())
                         if (favs.isEmpty()) Toast.makeText(requireContext(), "No favorite songs yet", Toast.LENGTH_SHORT).show()
-                        else PlaybackCenter.playMusic(favs.first().toQueueEntry(isMusic = true), radio = true)
+                        else PlaybackCenter.playMusic(favs.first().toUiModel().toQueueEntry(isMusic = true), radio = true)
                     }
                     "recent" -> {
                         if (history.isEmpty()) Toast.makeText(requireContext(), "Your music history is empty", Toast.LENGTH_SHORT).show()
-                        else PlaybackCenter.playMusic(history.first().toQueueEntry(isMusic = true), radio = true)
+                        else PlaybackCenter.playMusic(history.first().toUiModel().toQueueEntry(isMusic = true), radio = true)
                     }
                     else -> startActivity(SearchActivity.intent(requireContext(), music = true, prefill = mix.second))
                 }

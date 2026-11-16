@@ -20,7 +20,6 @@ import org.schabi.newpipe.extractor.localization.Localization
 
 object SparkTubeAppHolder {
     lateinit var context: android.content.Context
-        private set
 }
 
 class SparkTubeApp : Application(), ImageLoaderFactory {
@@ -113,7 +112,7 @@ class SparkTubeApp : Application(), ImageLoaderFactory {
             .diskCache {
                 DiskCache.Builder()
                     .directory(File(cacheDir, "image_cache"))
-                    .maxSize(DeviceTuning.imageDiskCacheBytes(this))
+                    .maxSizeBytes(DeviceTuning.imageDiskCacheBytes(this))
                     .build()
             }
             .bitmapConfig(DeviceTuning.imageBitmapConfig(this))
