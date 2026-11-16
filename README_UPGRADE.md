@@ -1,48 +1,60 @@
-# SparkTube v1.7.15 — Login Engine Budget Raised to 60 s + Real Re-Login Result Logging (`versionCode = 38`)
+# SparkTube v1.8.0 — Cloud Unlock Worker (18+ Fix, Final Architecture) (`versionCode = 39`)
 
-## What the Third Diagnostics Log Proved (v1.7.14 on device, decisive)
-1. **Refresh-first flow works**: `forcing session refresh` now fires ~1 s after
-   ladder failure, per-client reasons are logged.
-2. **The re-login never completes**: `attempt email=k*** timeout=30s` at
-   16:23:09.271 → `session refreshed` at 16:23:39.056 = exactly the 30 s window,
-   with NO `success cookieHeaderLen=…` line. The headless Google login on this
-   low-end device (SM-A107F, Android 11, BD network) needs more than 30 s.
-3. **The helper false-positived**: after the timeout it checked
-   `isLoggedIn()` — the stale cookies satisfy that check — and logged
-   "session refreshed" even though no fresh session landed. (The second
-   refresh was cancelled mid-login by the next tap and false-positived the
-   same way.)
-4. Consequently every signed-in client still answered
-   `status=LOGIN_REQUIRED reason=Sign in to confirm your age` — but we cannot
-   yet conclude whether the account itself is age-unverified, because no
-   genuinely fresh session has ever been tested.
-
-## Fixes (v1.7.15)
-1. **Login engine budget 30 s → 60 s** (`timeoutMs = 60_000L`) — measured
-   too short on low-end devices.
-2. **Real result logging in the refresh flow**: the helper now uses
-   `ensureSignedIn`'s Boolean return (65 s wait to cover the engine's 60 s
-   budget). Fresh session confirmed → `fresh session confirmed in <ms>ms —
-   retrying unlock`. Timeout/cancel/failure → `forced re-login FAILED after
-   <ms>ms — no fresh session, stale cookies unusable`. No more false
+## What the Fourth Diagnostics Log Proved (definitive)
+1. **On-device headless Google login is dead**: `attempt timeout=60s` →
+   `E/AutoLogin: failed kind=timeout msg=Sign-in did not complete in time` →
+   `forced re-login FAILED after 63891ms`. Even 60 s is not enough on this
+   device; Google's risk wall defeats automated logins. No further on-device
+   login tuning will fix this.
+2. The real-result logging worked exactly as designed — no more false
    "session refreshed".
-3. **Self-contained final verdict**: if a CONFIRMED fresh session still fails
-   the unlock, the log states it outright — "…if every signed-in client still
-   says 'Sign in to confirm your age' with fresh cookies, the Google account
-   itself is not age-verified (verify at youtube.com)".
+3. A network outage also appeared (`UnknownHostException`) — unrelated flakiness,
+   correctly surfaced in the trail.
 
-## The Decision Tree This Log Will Resolve
-- `success cookieHeaderLen=…` then `client unlock OK` → stale session was the
-  whole problem; fixed for good.
-- `success cookieHeaderLen=…` then all clients still
-  `Sign in to confirm your age` → **the Google account is not age-verified** —
-  verification must be done on the account (youtube.com → Settings → age
-  verification), no app change can bypass that.
-- `forced re-login FAILED` → login itself is blocked (risk wall / network);
-  the engine's `failed kind=… msg=…` line shows why.
+## The New Architecture (v1.8.0) — Cloud Unlock Worker
+The user-deployed Cloudflare Worker (stateless, free plan) does the unlock;
+the device streams directly:
+
+```
+SparkTube ──(video ID + own session cookies)──▶ Worker (clean IP)
+                                                 │ WEB/MWEB + SAPISIDHASH + cookies
+SparkTube (direct stream) ◀── stream URLs ────── YouTube InnerTube
+```
+
+Key design decisions:
+- **No password login in the worker** (datacenter IP automated logins get
+  blocked even harder). Cookies come from the **interactive browser login**
+  (`YouTubeLoginActivity` — the v1.7.8 WebView flow, re-exposed and now
+  recommended): a real browser session passes risk walls, captured once.
+- **Worker is stateless**: cookies travel with every request from the app.
+  Nothing is stored server-side.
+- **Cloud tier runs FIRST** in the unlock ladder when a worker URL is set
+  (`cloud tier OK` / `cloud tier miss status=… attempts=…` in the trail).
+- **Auto-play, no button**: once configured, 18+ videos resolve through the
+  worker automatically. Unconfigured age-gate failures now show actionable
+  Bangla guidance instead of a bare NewPipe message.
+
+## App changes
+1. `CloudUnlockClient` — worker HTTP client (cookies + visitor data headers).
+2. Cloud tier first in `fetchUnlockedPlayerJson` (same deobfuscation pipeline).
+3. Settings → Account dialog: **Browser login (recommended)**, **Cloud unlock —
+   Worker URL (18+)**, Auto login (headless), Sign out.
+4. `AppPrefs.workerUrl`; age-gate error hints on all three resolve paths.
+5. Worker ships with the release: `SparkTube-Cloudflare-Worker/worker.js` +
+   `DEPLOY-GUIDE-BN.md` (Bangla step-by-step).
+6. Worker endpoints: `/unlock?v=…` (WEB then MWEB, SAPISIDHASH via
+   `crypto.subtle`), `/stream?url=…` (Range-aware googlevideo proxy fallback),
+   `/` health check.
+
+## User setup (Bangla guide ships with the release)
+1. Cloudflare dashboard → Workers & Pages → Create Worker → paste `worker.js` → Deploy.
+2. Copy `https://<name>.<account>.workers.dev`.
+3. App → Settings → Account → **Browser login** (one-time interactive login).
+4. Settings → Account → **Cloud unlock — Worker URL** → paste URL → done.
+   18+ videos now play automatically.
 
 ## Build & Release
 ```bash
 ./gradlew assembleRelease
-# GitHub: tag v1.7.15 → CI builds the signed release APK
+# GitHub: tag v1.8.0 → CI builds the signed release APK
 ```

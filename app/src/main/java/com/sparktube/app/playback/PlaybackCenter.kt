@@ -1010,7 +1010,7 @@ object PlaybackCenter {
                         "E", "Playback",
                         "player error msg=${e.message?.take(150) ?: e.javaClass.simpleName}"
                     )
-                    notify { it.onError(if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message!!) }
+                    notify { it.onError(withAgeGateHint(e)) }
                 }
             } finally {
                 setResolving(false)
@@ -1642,7 +1642,7 @@ object PlaybackCenter {
                     if (e is LiveContentException) {
                         notify { it.onLiveContentBlocked() }
                     } else {
-                        notify { it.onError(if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message!!) }
+                        notify { it.onError(withAgeGateHint(e)) }
                     }
                 }
             } finally {
@@ -1721,6 +1721,25 @@ object PlaybackCenter {
             "unlock after refresh ${if (refreshed != null) "OK" else "FAIL"} vid=$vid"
         )
         return refreshed
+    }
+
+    /**
+     * v1.8.0: age-gated failures get actionable guidance instead of a bare
+     * NewPipe message — the two working fixes are a fresh session via the
+     * interactive browser login and (for 18+) the cloud unlock worker URL.
+     */
+    private fun withAgeGateHint(e: Throwable): String {
+        val base = if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message.orEmpty()
+        val isAgeGate = base.contains("age", ignoreCase = true) ||
+            base.contains("anonymously", ignoreCase = true) ||
+            base.contains("sign in", ignoreCase = true) ||
+            base.contains("login", ignoreCase = true)
+        if (!isAgeGate) return base
+        return if (com.sparktube.app.util.AppPrefs.workerUrl.isBlank()) {
+            "$base — 18+ ফিক্স: Settings → Account এ \"Browser login\" করুন, তারপর Account → \"Cloud unlock\" এ Worker URL সেট করুন"
+        } else {
+            "$base — 18+ ফিক্স: Settings → Account এ \"Browser login\" দিয়ে fresh session নিন"
+        }
     }
 
     private fun skipBrokenPlaylistItem(): Boolean {
@@ -1821,7 +1840,7 @@ object PlaybackCenter {
                         "E", "Playback",
                         "player error msg=${e.message?.take(150) ?: e.javaClass.simpleName}"
                     )
-                    notify { it.onError(if (e.message.isNullOrBlank()) e.javaClass.simpleName else e.message!!) }
+                    notify { it.onError(withAgeGateHint(e)) }
                 }
             } finally {
                 setResolving(false)

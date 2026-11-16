@@ -283,6 +283,35 @@ object YouTubePlayerUnlock {
         com.sparktube.app.util.DiagnosticsLogger.log(
             "I", "Unlock", "unlock start vid=$videoId loggedIn=$loggedIn"
         )
+
+        // v1.8.0: cloud tier FIRST — the on-device headless login engine cannot
+        // complete on many devices (30 s and 60 s budgets both time out), while
+        // the user-deployed Cloudflare Worker resolves the same player request
+        // with the device's own session cookies from a clean IP. The worker is
+        // stateless; cookies travel with every call.
+        if (AppPrefs.workerUrl.isNotBlank()) {
+            runCatching {
+                com.sparktube.app.net.CloudUnlockClient.fetchPlayerJson(videoId)
+            }.getOrNull()?.let { cloudJson ->
+                runCatching { deobfuscateAndPruneStreamingData(cloudJson, videoId) }
+                if (isPlayableWithDirectUrls(cloudJson)) {
+                    runCatching {
+                        normalizePlayerJson(cloudJson, null, videoId)
+                        ensureNewPipeThrottlingSafe(cloudJson, videoId)
+                    }
+                    if (hasDirectAdaptiveVideoAndAudio(cloudJson)) {
+                        unlockedCache[videoId] = CachedUnlock(cloudJson.toString(), System.currentTimeMillis())
+                        com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "cloud tier OK vid=$videoId")
+                        return cloudJson
+                    }
+                }
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "W", "Unlock",
+                    "cloud tier miss vid=$videoId status=${cloudJson.optJSONObject("playabilityStatus")?.optString("status").orEmpty()} attempts=${cloudJson.optString("xSparkTubeAttempts").take(140)}"
+                )
+            }
+        }
+
         val candidates = candidateList(loggedIn)
         var muxedOnlyFallback: JSONObject? = null
 

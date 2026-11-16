@@ -28,6 +28,7 @@ import com.sparktube.app.data.YtRepository
 import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.ui.music.Motion
 import com.sparktube.app.ui.auth.AutoLoginActivity
+import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.databinding.ActivitySettingsPageBinding
 import com.sparktube.app.download.DownloadCenter
@@ -346,26 +347,63 @@ class SettingsPageActivity : AppCompatActivity() {
     }
 
     private fun showYouTubeAccountDialog() {
-        if (!YouTubeAuth.isLoggedIn()) {
-            AutoLoginActivity.start(this)
-            return
-        }
+        // v1.8.0: interactive browser login is now the recommended path — the
+        // headless engine cannot complete on many devices (diagnostics proven),
+        // and the cloud unlock tier handles 18+ videos server-side.
         val options = arrayOf(
-            getString(R.string.youtube_account_relogin),
+            "Browser login (recommended)",
+            "Cloud unlock — Worker URL (18+)",
+            "Auto login (headless)",
             getString(R.string.youtube_account_sign_out)
         )
         AlertDialog.Builder(this)
             .setTitle(R.string.youtube_account_connected)
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> AutoLoginActivity.start(this)
-                    1 -> {
+                    0 -> YouTubeLoginActivity.start(this)
+                    1 -> showCloudUnlockDialog()
+                    2 -> AutoLoginActivity.start(this)
+                    else -> {
                         YouTubeAuth.clearSession()
                         YtRepository.clearCache()
                         render()
                         Toast.makeText(this, R.string.youtube_signed_out_toast, Toast.LENGTH_SHORT).show()
                     }
                 }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** v1.8.0: paste the URL of the user-deployed SparkTube Cloudflare worker. */
+    private fun showCloudUnlockDialog() {
+        val input = EditText(this).apply {
+            setText(AppPrefs.workerUrl)
+            setSelection(text.length)
+            setSingleLine()
+            hint = "https://sparktube-unlock.yourname.workers.dev"
+        }
+        val wrap = FrameLayout(this).apply {
+            setPadding(dp(22), dp(10), dp(22), 0)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Cloud unlock — Worker URL")
+            .setMessage(
+                "Deploy the SparkTube worker on Cloudflare (free — guide in the release notes), " +
+                    "then paste its URL here. 18+ videos resolve through it with your own session cookies. " +
+                    "Leave empty to disable the cloud tier."
+            )
+            .setView(wrap)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val entered = input.text?.toString()?.trim().orEmpty().removeSuffix("/")
+                AppPrefs.workerUrl = entered
+                render()
+                Toast.makeText(
+                    this,
+                    if (entered.isBlank()) "Cloud unlock disabled" else "Cloud unlock: $entered",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
