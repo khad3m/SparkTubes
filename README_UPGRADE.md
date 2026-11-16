@@ -1,48 +1,50 @@
-# SparkTube v1.7.12 — Full Diagnostics Logging: Browse, Search, Playback & Auto-Login Trail on Device (`versionCode = 35`)
+# SparkTube v1.7.13 — Stale-Session Fix: Forced Sign-In Refresh After Unlock Failure + Full Unlock/Playback Trail (`versionCode = 36`)
 
-## Why
-When playback, search or sign-in misbehaves, the reason so far stayed invisible.
-v1.7.12 records **everything since app start** to an on-device diagnostics file so
-the user can export it and send it along — then the exact failing step (search,
-stream fetch, age-gate path, unlock ladder, auto-login kind, crash) is visible in
-the log and can be fixed precisely.
+## What the v1.7.12 Diagnostics Log Showed (exact diagnosis)
+The user's log from a Samsung SM-A107F (Android 11) proved the real failure chain:
 
-## What Gets Recorded
-- **Session header** at every app start: app version, Android version, device model,
-  country preference, whether credentials are saved, whether a session is active.
-- **Browse/search**: every category load (home) and every video search — query,
-  page, result count; failures with exception class + message.
-- **Playback**: every resolve (video id + title), stream-fetch success (stream
-  counts + duration) or failure, age-gate unlock path entry with the trigger
-  reason, unlock-ladder OK/FAIL, and the final player error shown to the user.
-- **Auto-login**: pre-play kickoff (and its skip reasons), each attempt (email
-  masked), engine result (`success cookies=N` / `failed kind=… msg=…`).
-- **Crashes**: any uncaught exception with a 14-frame stack, chained after the
-  existing CrashReporter so nothing is lost.
+- `hasCreds=true loggedIn=true` — a Google session exists on the device.
+- Yet every strict 18+ video failed with `AgeRestrictedContentException: This
+  age-restricted video cannot be watched anonymously` — meaning YouTube treats
+  the stored session as anonymous.
+- The unlock ladder produced nothing for those videos (one video only got a
+  muxed-only unlock via the Piped fallback), and no `Playback`/`AutoLogin` lines
+  appeared — the main video resolve and `resolveCatalog` paths were not yet
+  instrumented.
 
-## Privacy
-- Emails are masked (`a***@gmail.com`); passwords, cookies and session values are
-  never written to the log.
-- The file lives in app-internal storage (`files/diagnostics/`), rotated at 512 KB
-  with one previous generation kept. Nothing leaves the device unless the user
-  taps **Share**.
+**Conclusion:** the saved cookies are stale (SID/SAPISID strings still present,
+so `isLoggedIn()` reports true, but the server-side session is dead). Every
+authenticated request therefore degrades to anonymous — and because the app
+believed it was already signed in, no re-login was ever attempted. Deadlock.
 
-## How to Use (Menu → Settings → Diagnostics Log)
-1. Reproduce the problem (search the 18+ video, play it, note what happens).
-2. Open **Settings → Diagnostics Log**, tap **Share** (or **Copy**) and send the
-   text along with a note of what failed. The last session's events are at the
-   bottom of the log; **Clear** resets it.
+## Fixes (v1.7.13)
+1. **Forced session refresh + unlock retry** — in both age-gate catch paths
+   (main video resolve and `resolveCatalog`): if the unlock ladder fails while
+   `isLoggedIn()` is true, `refreshSessionAndUnlock()` now forces one fresh
+   headless sign-in (`ensureSignedIn(force = true)`, 30 s cap), verifies the new
+   session, and retries the unlock with the fresh cookies. Throttled to once per
+   2 minutes so genuinely un-unlockable videos never loop logins.
+2. **Full playback/unlock trail** (the two missing paths are now instrumented):
+   - `resolve vid=<id> title=…` at the start of BOTH resolve functions, with the
+     pre-play auto-login kickoff added to both.
+   - Unlock engine tier log: `unlock start (loggedIn=…)`, per-tier outcomes —
+     `client unlock OK`, `web-client tiers exhausted (muxedOnly=…)`,
+     `webview unlock OK / miss`, `muxed-only unlock OK`, `piped unlock OK`,
+     `ALL tiers failed`.
+   - Refresh flow logged step-by-step: `forcing session refresh`, `session
+     refresh FAILED`, `session refreshed — retrying unlock`, `unlock after
+     refresh OK/FAIL`, plus the final player error.
+3. **Session header fix** — diagnostics install moved after `AppPrefs.init`, so
+   the header now carries the real country instead of `?`.
 
-## Implementation Notes
-- `DiagnosticsLogger` (util): thread-safe writer executor + in-memory ring
-  (400 lines) + rotated file; fallback tail from memory if files are unreadable.
-- `DiagnosticsActivity` (menu): monospace tail view with Copy / Share / Clear.
-- Instrumented chokepoints: `YtRepository.searchVideos` / `streamInfo`
-  (wrapper functions — internal logic untouched), `PlaybackCenter` resolve and
-  catch paths, `YouTubeAutoLogin`, `HomeFragment`, app start.
+## Expected Behaviour After This Release
+- 18+ videos with a dead session: ladder fails → forced re-login (~10–20 s) →
+  retry with fresh cookies → plays. The log will show exactly which tier
+  succeeded or that the account itself is unverified for age-restricted content.
+- Everything else unchanged.
 
 ## Build & Release
 ```bash
 ./gradlew assembleRelease
-# GitHub: tag v1.7.12 → CI builds the signed release APK
+# GitHub: tag v1.7.13 → CI builds the signed release APK
 ```

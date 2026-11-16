@@ -1557,6 +1557,10 @@ object PlaybackCenter {
         }
 
         setResolving(true)
+        YouTubeAutoLogin.kickoff(appContext)
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(entry.url)} title=${entry.title.take(60)}"
+        )
         resolveJob = scope.launch {
             try {
                 if (local != null && startLocalFiles(local, 0L)) {
@@ -1619,6 +1623,7 @@ object PlaybackCenter {
                             }
                         }
                     val directCatalog = directJson?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                        ?: refreshSessionAndUnlock(vid, entry.url)
                     if (directCatalog != null && currentEntry?.url == entry.url) {
                         catalog = directCatalog
                         LocalStore.addToHistory(appContext, entry.toVideoEntry())
@@ -1650,6 +1655,54 @@ object PlaybackCenter {
         notify { it.onResolvingChanged(resolving) }
     }
 
+    @Volatile private var lastForceRefreshAt: Long = 0L
+
+    /**
+     * v1.7.13: when the unlock ladder fails while a session exists, the saved
+     * cookies are usually stale (dead session → YouTube answers anonymously
+     * and even signed-in clients see LOGIN_REQUIRED). Force one fresh headless
+     * sign-in, then retry the unlock with the new cookies. Throttled to once
+     * per 2 minutes so un-unlockable videos never loop logins.
+     */
+    private suspend fun refreshSessionAndUnlock(vid: String, url: String): StreamCatalog? {
+        if (!YouTubeAuth.isLoggedIn()) return null
+        val now = System.currentTimeMillis()
+        if (now - lastForceRefreshAt < 2 * 60_000L) {
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "refresh skipped (recent) vid=$vid")
+            return null
+        }
+        lastForceRefreshAt = now
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "W", "Playback", "ladder failed while logged in — forcing session refresh vid=$vid"
+        )
+        runCatching {
+            kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+                YouTubeAutoLogin.ensureSignedIn(appContext, force = true)
+            }
+        }
+        if (!YouTubeAuth.isLoggedIn()) {
+            com.sparktube.app.util.DiagnosticsLogger.log("E", "Playback", "session refresh FAILED vid=$vid")
+            return null
+        }
+        com.sparktube.app.util.DiagnosticsLogger.log("I", "Playback", "session refreshed — retrying unlock vid=$vid")
+        val json = kotlinx.coroutines.withContext(Dispatchers.IO) {
+            YouTubePlayerUnlock.fetchUnlockedPlayerJson(vid)
+        } ?: run {
+            com.sparktube.app.util.DiagnosticsLogger.log("E", "Playback", "unlock after refresh FAIL vid=$vid")
+            return null
+        }
+        val refreshed = kotlinx.coroutines.withContext(Dispatchers.IO) {
+            runCatching {
+                StreamCatalog.fromPlayerJson(YouTubePlayerUnlock.deobfuscateAndNormalize(json, vid), url)
+            }.getOrNull()
+        }
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            if (refreshed != null) "I" else "E", "Playback",
+            "unlock after refresh ${if (refreshed != null) "OK" else "FAIL"} vid=$vid"
+        )
+        return refreshed
+    }
+
     private fun skipBrokenPlaylistItem(): Boolean {
         if (!playlistMode || mode != Mode.VIDEO || queueIndex >= queue.size - 1) return false
         val failedIndex = queueIndex
@@ -1669,6 +1722,10 @@ object PlaybackCenter {
             return
         }
         setResolving(true)
+        YouTubeAutoLogin.kickoff(appContext)
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "I", "Playback", "resolve vid=${DownloadCenter.videoIdOf(entry.url)} title=${entry.title.take(60)}"
+        )
         resolveJob = scope.launch {
             try {
                 // v1.7.4: a prefetched short skips the network entirely — its
@@ -1723,6 +1780,7 @@ object PlaybackCenter {
                                 }
                             }
                             ?.let { StreamCatalog.fromPlayerJson(it, entry.url) }
+                        ?: refreshSessionAndUnlock(vid, entry.url)
                     if (direct != null && currentEntry?.url == entry.url) {
                         catalog = direct
                         LocalStore.addToMusicHistory(appContext, entry.toVideoEntry())

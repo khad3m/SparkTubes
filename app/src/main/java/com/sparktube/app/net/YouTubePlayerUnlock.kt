@@ -280,6 +280,9 @@ object YouTubePlayerUnlock {
         }
 
         val loggedIn = YouTubeAuth.isLoggedIn()
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "I", "Unlock", "unlock start vid=$videoId loggedIn=$loggedIn"
+        )
         val candidates = candidateList(loggedIn)
         var muxedOnlyFallback: JSONObject? = null
 
@@ -291,6 +294,7 @@ object YouTubePlayerUnlock {
                 ensureNewPipeThrottlingSafe(fb, videoId)
                 if (hasDirectAdaptiveVideoAndAudio(fb)) {
                     unlockedCache[videoId] = CachedUnlock(fb.toString(), System.currentTimeMillis())
+                    com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "client unlock OK vid=$videoId")
                     return fb
                 } else if (muxedOnlyFallback == null) {
                     muxedOnlyFallback = fb
@@ -299,6 +303,9 @@ object YouTubePlayerUnlock {
         }
 
         // Next tier: Hidden WebView V8 engine (captures deciphered <video src> + in-page TVHTML5 fetch)
+        com.sparktube.app.util.DiagnosticsLogger.log(
+            "I", "Unlock", "web-client tiers exhausted vid=$videoId (muxedOnly=${muxedOnlyFallback != null})"
+        )
         val webViewObj = YouTubeWebViewUnlock.extractPlayerJsonBlocking(videoId)
         if (webViewObj != null) {
             deobfuscateAndPruneStreamingData(webViewObj, videoId)
@@ -306,12 +313,15 @@ object YouTubePlayerUnlock {
                 normalizePlayerJson(webViewObj, null, videoId)
                 ensureNewPipeThrottlingSafe(webViewObj, videoId)
                 unlockedCache[videoId] = CachedUnlock(webViewObj.toString(), System.currentTimeMillis())
+                com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "webview unlock OK vid=$videoId")
                 return webViewObj
             }
         }
+        com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "webview tier miss vid=$videoId")
 
         if (muxedOnlyFallback != null) {
             unlockedCache[videoId] = CachedUnlock(muxedOnlyFallback.toString(), System.currentTimeMillis())
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "muxed-only unlock OK vid=$videoId")
             return muxedOnlyFallback
         }
 
@@ -321,8 +331,10 @@ object YouTubePlayerUnlock {
             normalizePlayerJson(pipedObj, null, videoId)
             ensureNewPipeThrottlingSafe(pipedObj, videoId)
             unlockedCache[videoId] = CachedUnlock(pipedObj.toString(), System.currentTimeMillis())
+            com.sparktube.app.util.DiagnosticsLogger.log("I", "Unlock", "piped unlock OK vid=$videoId")
             return pipedObj
         }
+        com.sparktube.app.util.DiagnosticsLogger.log("E", "Unlock", "ALL tiers failed vid=$videoId")
 
         return null
     }
