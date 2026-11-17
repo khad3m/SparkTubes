@@ -219,6 +219,8 @@ class HomeFragment : Fragment(), ScrollsToTop {
 
     override fun onResume() {
         super.onResume()
+        // v1.9.8: chrome is always visible when you arrive at the home tab
+        if (_binding != null) showChrome()
         binding.countryFlag.text = Countries.flagOf(AppPrefs.countryOrDefault)
         setupPersonalizedChips()
         maybeReload()
@@ -347,12 +349,11 @@ class HomeFragment : Fragment(), ScrollsToTop {
                 duration = 180
                 interpolator = android.view.animation.DecelerateInterpolator()
                 addUpdateListener { a ->
-                    v.layoutParams.height = a.animatedValue as Int
+                    val h2 = a.animatedValue as Int
+                    v.layoutParams.height = h2
                     v.layoutParams = v.layoutParams
+                    if (h2 == 0) v.isVisible = false
                 }
-                addListener(object : android.animation.AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(a: android.animation.Animator?) { v.isVisible = false }
-                })
                 start()
             }
         }
@@ -369,24 +370,17 @@ class HomeFragment : Fragment(), ScrollsToTop {
                 duration = 180
                 interpolator = android.view.animation.DecelerateInterpolator()
                 addUpdateListener { a ->
-                    v.layoutParams.height = a.animatedValue as Int
+                    val h2 = a.animatedValue as Int
+                    v.layoutParams.height = h2
                     v.layoutParams = v.layoutParams
-                }
-                addListener(object : android.animation.AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(a: android.animation.Animator?) {
+                    if (h2 == h) {
                         v.layoutParams.height = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
                         v.layoutParams = v.layoutParams
                     }
-                })
+                }
                 start()
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // v1.9.8: chrome is always visible when you arrive at the home tab
-        if (_binding != null) showChrome()
     }
 
     override fun onDestroyView() {
