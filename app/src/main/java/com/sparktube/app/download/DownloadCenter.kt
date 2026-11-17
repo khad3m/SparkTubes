@@ -707,7 +707,76 @@ object DownloadCenter {
         }.getOrNull()
     }
 
+    /**
+     * v1.9.5 production fix: on Android 10+ (scoped storage, targetSdk 30+) direct
+     * java.io writes to public folders fail, so the raw download lands in the
+     * app-private dir — invisible to the user. After completion we therefore PUBLISH
+     * a copy into the public MediaStore collection matching the chosen folder mode
+     * (Download/SparkTube, Music/SparkTube, Movies/SparkTube). The private original
+     * is kept as the source of truth for pause/resume/retry/merge.
+     */
+    private fun publishToPublicStorageIfNeeded(ctx: Context, record: DownloadRecord) {
+        if (Build.VERSION.SDK_INT < 29) return
+        if (android.os.Environment.isExternalStorageLegacy()) return
+        if (AppPrefs.downloadFolderMode == AppPrefs.FOLDER_MODE_APP_PRIVATE) return
+        val files = record.filePaths.filter { runCatching { File(it).exists() }.getOrDefault(false) }
+        if (files.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            files.forEach { path ->
+                runCatching {
+                    val f = File(path)
+                    val lower = path.lowercase()
+                    val isAudioType = record.type == TYPE_AUDIO
+                    val mime = when {
+                        lower.endsWith(".webm") -> if (isAudioType) "audio/webm" else "video/webm"
+                        lower.endsWith(".m4a") || lower.endsWith(".mp3") || lower.endsWith(".opus") ||
+                            lower.endsWith(".ogg") || isAudioType -> "audio/mp4"
+                        else -> "video/mp4"
+                    }
+                    val relative: String
+                    val collection: android.net.Uri
+                    when {
+                        AppPrefs.downloadFolderMode == AppPrefs.FOLDER_MODE_PUBLIC_MEDIA && isAudioType -> {
+                            relative = "Music/SparkTube/"
+                            collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                        }
+                        AppPrefs.downloadFolderMode == AppPrefs.FOLDER_MODE_PUBLIC_MEDIA -> {
+                            relative = "Movies/SparkTube/"
+                            collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                        }
+                        else -> {
+                            relative = "Download/SparkTube/"
+                            collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                        }
+                    }
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relative)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    val resolver = ctx.contentResolver
+                    val uri = resolver.insert(collection, values) ?: return@runCatching
+                    resolver.openOutputStream(uri)?.use { out ->
+                        f.inputStream().use { input -> input.copyTo(out) }
+                    } ?: run {
+                        resolver.delete(uri, null, null)
+                        return@runCatching
+                    }
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    com.sparktube.app.util.DiagnosticsLogger.log(
+                        "I", "Download", "published to MediaStore: $relative${f.name}"
+                    )
+                }
+            }
+        }
+    }
+
     private fun finishCompletedRecord(ctx: Context, record: DownloadRecord) {
+        // v1.9.5: make finished files REALLY visible in public storage (scoped storage fix)
+        publishToPublicStorageIfNeeded(ctx, record)
         // Index files in Android MediaStore so they immediately show up in Gallery / Music / File Manager
         val existingPaths = record.filePaths.filter { File(it).exists() }.toTypedArray()
         if (existingPaths.isNotEmpty()) {
