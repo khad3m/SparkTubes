@@ -75,7 +75,11 @@ class PlaybackService : MediaSessionService() {
         } else {
             MainActivity::class.java
         }
-        val intent = Intent(this, target).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        // v1.9.6: NEW_TASK is REQUIRED when a PendingIntent starts from a Service /
+        // notification context — without it the system spawns a second task and the
+        // app appeared TWICE in Android Recents.
+        val intent = Intent(this, target)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return PendingIntent.getActivity(
             this,
             0,

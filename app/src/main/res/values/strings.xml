@@ -402,4 +402,6 @@
     <string name="youtube_account_sign_out">Sign out (Clear YouTube cookies)</string>
     <string name="youtube_signed_out_toast">Signed out of YouTube account</string>
     <string name="youtube_unlock_sign_in_btn">Sign in with Google to Unlock</string>
+    <string name="action_more">More options</string>
+
 </resources>

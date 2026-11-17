@@ -46,6 +46,13 @@ class PlaylistActivity : AppCompatActivity() {
 
         adapter = VideoAdapter(
             onClick = { model -> playFrom(videos.indexOfFirst { it.url == model.url }) },
+            onMenuClick = { model ->
+                com.sparktube.app.ui.common.CardMenu.show(
+                    this, model,
+                    onRemove = { confirmRemove(model) },
+                    removeLabel = "Remove from Playlist"
+                )
+            },
             onLongClick = { model ->
                 confirmRemove(model)
                 true
@@ -57,6 +64,7 @@ class PlaylistActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
         binding.playAllButton.setOnClickListener { playFrom(0) }
         binding.playMusicAllButton.setOnClickListener { playMusicFrom(0) }
+        binding.manageButton.setOnClickListener { showManageSheet() }
     }
 
     override fun onResume() {
@@ -105,6 +113,49 @@ class PlaylistActivity : AppCompatActivity() {
             allowRadio = true
         )
         com.sparktube.app.ui.music.NowPlayingActivity.start(this)
+    }
+
+    /** v1.9.6: premium playlist management sheet. */
+    private fun showManageSheet() {
+        val playlist = LocalStore.playlist(this, playlistId) ?: return
+        val items = listOf(
+            com.sparktube.app.ui.music.ActionSheet.Item("Play All (Video)") {
+                playFrom(0)
+            },
+            com.sparktube.app.ui.music.ActionSheet.Item("Play All (Music)") {
+                playMusicFrom(0)
+            },
+            com.sparktube.app.ui.music.ActionSheet.Item("Rename Playlist", accent = true) {
+                val input = android.widget.EditText(this)
+                input.setText(playlist.name)
+                input.setSelection(input.text?.length ?: 0)
+                AlertDialog.Builder(this)
+                    .setTitle("Rename playlist")
+                    .setView(input)
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        val name = input.text?.toString()?.trim().orEmpty()
+                        if (name.isNotEmpty() && LocalStore.renamePlaylist(this, playlistId, name)) {
+                            binding.title.text = name
+                            Toast.makeText(this, "Playlist renamed", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            },
+            com.sparktube.app.ui.music.ActionSheet.Item("Delete Playlist") {
+                AlertDialog.Builder(this)
+                    .setTitle("Delete playlist")
+                    .setMessage("Delete \"${playlist.name}\" permanently?")
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        LocalStore.deletePlaylist(this, playlistId)
+                        Toast.makeText(this, "Playlist deleted", Toast.LENGTH_SHORT).show()
+                        finish()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        )
+        com.sparktube.app.ui.music.ActionSheet.show(this, playlist.name, "${videos.size} videos", items)
     }
 
     private fun confirmRemove(model: VideoUiModel) {

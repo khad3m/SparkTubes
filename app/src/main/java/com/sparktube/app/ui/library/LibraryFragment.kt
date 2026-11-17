@@ -76,6 +76,27 @@ class LibraryFragment : Fragment() {
 
         videoAdapter = VideoAdapter(
             onClick = { model -> PlayerActivity.start(requireContext(), model) },
+            onMenuClick = { model ->
+                if (tab == TAB_HISTORY) {
+                    com.sparktube.app.ui.common.CardMenu.show(
+                        requireContext(), model,
+                        onRemove = {
+                            LocalStore.removeFromHistory(requireContext(), model.url)
+                            refresh()
+                        },
+                        removeLabel = "Remove from History"
+                    )
+                } else {
+                    com.sparktube.app.ui.common.CardMenu.show(
+                        requireContext(), model,
+                        onRemove = {
+                            LocalStore.toggleFavorite(requireContext(), model.toEntry())
+                            refresh()
+                        },
+                        removeLabel = "Remove from Favorites"
+                    )
+                }
+            },
             onLongClick = { model ->
                 if (tab == TAB_HISTORY) {
                     LocalStore.removeFromHistory(requireContext(), model.url)

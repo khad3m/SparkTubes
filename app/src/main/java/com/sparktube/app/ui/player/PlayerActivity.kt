@@ -284,7 +284,8 @@ class PlayerActivity : AppCompatActivity() {
                 PlaybackCenter.playMusic(entry, radio = true)
                 NowPlayingActivity.start(this)
                 finish()
-            }
+            },
+            onMenuClick = { model -> com.sparktube.app.ui.common.CardMenu.show(this, model) }
         )
         binding.relatedList.layoutManager = LinearLayoutManager(this)
         binding.relatedList.adapter = relatedAdapter
@@ -380,15 +381,25 @@ class PlayerActivity : AppCompatActivity() {
 
         applyOrientation(resources.configuration)
 
+        // v1.9.6: defensive playback start — any failure logs and closes the page
+        // gracefully instead of crashing the app (audio keeps playing).
         if (intent.getBooleanExtra(EXTRA_ATTACH, false) && PlaybackCenter.hasMedia) {
-            if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO || PlaybackCenter.audioOnlyMode) {
-                PlaybackCenter.switchToVideoPlayerMode()
-            } else {
-                PlaybackCenter.switchBackToVideo()
+            runCatching {
+                if (PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO || PlaybackCenter.audioOnlyMode) {
+                    PlaybackCenter.switchToVideoPlayerMode()
+                } else {
+                    PlaybackCenter.switchBackToVideo()
+                }
+                loadedUrl = PlaybackCenter.currentEntry?.url
+                PlaybackCenter.currentEntry?.let(::bind)
+                bindCatalog()
+            }.onFailure { e ->
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "E", "Player", "attach start failed: ${e.javaClass.simpleName}: ${e.message?.take(120) ?: ""}"
+                )
+                Toast.makeText(this, "Playback could not be attached", Toast.LENGTH_SHORT).show()
+                finish()
             }
-            loadedUrl = PlaybackCenter.currentEntry?.url
-            PlaybackCenter.currentEntry?.let(::bind)
-            bindCatalog()
             updateModeSwitcherUi()
         } else {
             val entry = entryFromIntent()
@@ -396,18 +407,26 @@ class PlayerActivity : AppCompatActivity() {
                 finish()
                 return
             }
-            if (PlaybackCenter.currentEntry?.url == entry.url && PlaybackCenter.mode == PlaybackCenter.Mode.VIDEO) {
-                PlaybackCenter.switchBackToVideo()
-                loadedUrl = entry.url
-                bind(entry)
-                bindCatalog()
-            } else if (PlaybackCenter.currentEntry?.url == entry.url && PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO) {
-                PlaybackCenter.switchToVideoPlayerMode()
-                loadedUrl = entry.url
-                bind(entry)
-                bindCatalog()
-            } else {
-                PlaybackCenter.playVideo(entry)
+            runCatching {
+                if (PlaybackCenter.currentEntry?.url == entry.url && PlaybackCenter.mode == PlaybackCenter.Mode.VIDEO) {
+                    PlaybackCenter.switchBackToVideo()
+                    loadedUrl = entry.url
+                    bind(entry)
+                    bindCatalog()
+                } else if (PlaybackCenter.currentEntry?.url == entry.url && PlaybackCenter.mode == PlaybackCenter.Mode.AUDIO) {
+                    PlaybackCenter.switchToVideoPlayerMode()
+                    loadedUrl = entry.url
+                    bind(entry)
+                    bindCatalog()
+                } else {
+                    PlaybackCenter.playVideo(entry)
+                }
+            }.onFailure { e ->
+                com.sparktube.app.util.DiagnosticsLogger.log(
+                    "E", "Player", "start failed: ${e.javaClass.simpleName}: ${e.message?.take(120) ?: ""}"
+                )
+                Toast.makeText(this, "Playback could not start", Toast.LENGTH_SHORT).show()
+                finish()
             }
             updateModeSwitcherUi()
         }

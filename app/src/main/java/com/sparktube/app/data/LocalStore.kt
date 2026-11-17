@@ -354,6 +354,19 @@ object LocalStore {
         writePlaylists(prefs(ctx), list)
     }
 
+    /** v1.9.6: premium playlist management — inline rename. */
+    fun renamePlaylist(context: Context, id: Long, name: String): Boolean {
+        val clean = name.trim()
+        if (clean.isEmpty()) return false
+        val ctx = context.applicationContext
+        val list = playlists(ctx).toMutableList()
+        val idx = list.indexOfFirst { it.id == id }
+        if (idx < 0) return false
+        list[idx] = list[idx].copy(name = clean)
+        writePlaylists(prefs(ctx), list)
+        return true
+    }
+
     fun addToPlaylist(context: Context, id: Long, entry: VideoEntry): Boolean {
         val ctx = context.applicationContext
         val list = playlists(ctx).toMutableList()

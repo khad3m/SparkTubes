@@ -56,7 +56,7 @@ class ChannelActivity : AppCompatActivity() {
 
         adapter = VideoAdapter(onClick = { model ->
             PlayerActivity.start(this, model)
-        })
+        }, onMenuClick = { model -> com.sparktube.app.ui.common.CardMenu.show(this, model) })
         binding.list.layoutManager = LinearLayoutManager(this)
         binding.list.adapter = adapter
 

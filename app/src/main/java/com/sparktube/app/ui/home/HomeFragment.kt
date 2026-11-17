@@ -75,7 +75,8 @@ class HomeFragment : Fragment(), ScrollsToTop {
                     Toast.LENGTH_SHORT
                 ).show()
                 NowPlayingActivity.start(requireContext())
-            }
+            },
+            onMenuClick = { model -> CardMenu.show(requireContext(), model) }
         )
         binding.list.layoutManager = LinearLayoutManager(requireContext())
         binding.list.adapter = adapter
@@ -244,7 +245,12 @@ class HomeFragment : Fragment(), ScrollsToTop {
         loadJob = viewLifecycleOwner.lifecycleScope.launch {
             b.errorView.isVisible = false
             b.emptyView.isVisible = false
-            val warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, DeviceTuning.feedCacheTtlMs(requireContext()))
+            // v1.9.6: stale-while-revalidate ALWAYS — previously loaded cards appear
+            // instantly even when the TTL expired, while the fresh feed loads below.
+            var warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, DeviceTuning.feedCacheTtlMs(requireContext()))
+            if (warm.isEmpty()) {
+                warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, 0L)
+            }
             if (warm.isNotEmpty()) {
                 b.list.adapter = adapter
                 adapter.submitList(warm.map { it.toUiModel() })

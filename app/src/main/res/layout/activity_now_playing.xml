@@ -211,6 +211,19 @@
                 android:src="@drawable/ic_favorite_border"
                 app:tint="@color/white" />
 
+            <!-- v1.9.6: Add to Playlist, next to the favorite button -->
+            <ImageButton
+                android:id="@+id/playlistAddButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="2dp"
+                android:background="@drawable/bg_np_glass_circle_inset"
+                android:contentDescription="Add to playlist"
+                android:padding="12dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_playlist_add"
+                app:tint="@color/white" />
+
             <ImageButton
                 android:id="@+id/moreOptionsButton"
                 android:layout_width="44dp"

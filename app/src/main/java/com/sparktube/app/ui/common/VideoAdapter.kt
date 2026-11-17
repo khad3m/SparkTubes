@@ -13,7 +13,9 @@ import com.sparktube.app.util.Thumbs
 class VideoAdapter(
     private val onClick: (VideoUiModel) -> Unit,
     private val onLongClick: ((VideoUiModel) -> Boolean)? = null,
-    private val onAudioClick: ((VideoUiModel) -> Unit)? = null
+    private val onAudioClick: ((VideoUiModel) -> Unit)? = null,
+    /** v1.9.6: ••• overflow menu on every card (Play / Favorite / Share / Download / Remove). */
+    private val onMenuClick: ((VideoUiModel) -> Unit)? = null
 ) : ListAdapter<VideoUiModel, VideoAdapter.VH>(DIFF) {
 
     companion object {
@@ -56,6 +58,13 @@ class VideoAdapter(
             }
         } else {
             b.cardAudioQuickBtn.visibility = android.view.View.GONE
+        }
+
+        if (onMenuClick != null) {
+            b.cardMenuBtn.visibility = android.view.View.VISIBLE
+            b.cardMenuBtn.setOnClickListener { onMenuClick?.invoke(item) }
+        } else {
+            b.cardMenuBtn.visibility = android.view.View.GONE
         }
 
         b.root.animate().cancel()

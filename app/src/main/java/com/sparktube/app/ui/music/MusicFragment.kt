@@ -214,7 +214,11 @@ class MusicFragment : Fragment(), ScrollsToTop {
             if (!fromPull) showMusicSkeleton(b)
             try {
                 val country = AppPrefs.countryOrDefault
-                val warm = LocalStore.readFeedCache(requireContext(), true, country, "music", DeviceTuning.feedCacheTtlMs(requireContext()))
+                val warm = run {
+                    var w = LocalStore.readFeedCache(requireContext(), true, country, "music", DeviceTuning.feedCacheTtlMs(requireContext()))
+                    if (w.isEmpty()) w = LocalStore.readFeedCache(requireContext(), true, country, "music", 0L)
+                    w // v1.9.6: stale cards render instantly, fresh list still refreshes below
+                }
                 if (warm.isNotEmpty() && cachedModels.isEmpty()) {
                     cachedModels = warm.map { it.toUiModel() }
                     loadedCountry = country
@@ -489,15 +493,25 @@ class MusicFragment : Fragment(), ScrollsToTop {
 
                 addView(
                     ImageView(ctx).apply {
-                        setImageResource(R.drawable.ic_music_note)
+                        // v1.9.6: per-genre premium watermark glyph
+                        setImageResource(
+                            when (genre.label) {
+                                "Top Charts" -> R.drawable.ic_speed
+                                "Hip-Hop" -> R.drawable.ic_headset
+                                "Bollywood" -> R.drawable.ic_audiotrack
+                                "Rock" -> R.drawable.ic_speed
+                                "Dance & EDM" -> R.drawable.ic_audiotrack
+                                else -> R.drawable.ic_music_note
+                            }
+                        )
                         setColorFilter(Color.WHITE)
-                        alpha = 0.18f
+                        alpha = 0.22f
                         rotation = 18f
                         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                     },
-                    FrameLayout.LayoutParams(dp(64), dp(64), Gravity.END or Gravity.TOP).apply {
-                        marginEnd = -dp(6)
-                        topMargin = -dp(6)
+                    FrameLayout.LayoutParams(dp(88), dp(88), Gravity.END or Gravity.TOP).apply {
+                        marginEnd = -dp(8)
+                        topMargin = -dp(8)
                     }
                 )
                 addView(
@@ -518,8 +532,9 @@ class MusicFragment : Fragment(), ScrollsToTop {
                         binding.scroll.smoothScrollTo(0, 0)
                         load()
                     } else {
-                        startActivity(
-                            SearchActivity.intent(requireContext(), music = true, prefill = genre.query)
+                        // v1.9.6: preset loads results in-app — no visible YouTube search page.
+                        com.sparktube.app.ui.music.MusicListActivity.startPreset(
+                            requireContext(), genre.label + " Songs", genre.query.orEmpty()
                         )
                     }
                 }
@@ -596,7 +611,9 @@ class MusicFragment : Fragment(), ScrollsToTop {
                         if (history.isEmpty()) Toast.makeText(requireContext(), "Your music history is empty", Toast.LENGTH_SHORT).show()
                         else PlaybackCenter.playMusic(history.first().toUiModel().toQueueEntry(isMusic = true), radio = true)
                     }
-                    else -> startActivity(SearchActivity.intent(requireContext(), music = true, prefill = mix.second))
+                    else -> com.sparktube.app.ui.music.MusicListActivity.startPreset(
+                        requireContext(), mix.first, mix.second
+                    )
                 }
                 if (mix.second == "favorites" || mix.second == "recent") NowPlayingActivity.start(requireContext())
             }

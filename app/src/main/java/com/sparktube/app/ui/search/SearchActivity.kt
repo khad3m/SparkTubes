@@ -115,7 +115,7 @@ class SearchActivity : AppCompatActivity() {
 
         videoAdapter = VideoAdapter(onClick = { model ->
             PlayerActivity.start(this, model)
-        })
+        }, onMenuClick = { model -> com.sparktube.app.ui.common.CardMenu.show(this, model) })
         channelAdapter = ChannelRowAdapter(
             onClick = { channel ->
                 ChannelActivity.start(this, channel.url, channel.name)

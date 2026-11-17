@@ -36,6 +36,16 @@
             android:textColor="@color/on_surface"
             android:textSize="20sp"
             android:textStyle="bold" />
+
+        <!-- v1.9.6: playlist management (Rename / Delete / Play all) -->
+        <ImageButton
+            android:id="@+id/manageButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/action_more"
+            android:src="@drawable/ic_np_more"
+            app:tint="@color/on_surface" />
     </LinearLayout>
 
     <!-- Play all + video count (hidden while the playlist is empty). -->

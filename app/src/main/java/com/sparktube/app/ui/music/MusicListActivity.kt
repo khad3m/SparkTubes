@@ -17,12 +17,15 @@ import com.sparktube.app.data.VideoEntry
 import com.sparktube.app.databinding.ActivityMusicListBinding
 import com.sparktube.app.download.DownloadCenter
 import com.sparktube.app.playback.PlaybackCenter
+import com.sparktube.app.playback.toQueueEntry
 import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.ui.common.DownloadAdapter
 import com.sparktube.app.ui.common.MusicRowAdapter
 import com.sparktube.app.ui.common.VideoUiModel
 import com.sparktube.app.util.AppPrefs
 import com.sparktube.app.util.Themes
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -38,6 +41,9 @@ class MusicListActivity : AppCompatActivity() {
     private lateinit var downloadAdapter: DownloadAdapter
 
     private var favourites = true
+    /** v1.9.6: preset mode — curated backend search; the raw query is never shown to the user. */
+    private var presetQuery: String? = null
+    private var presetLoaded = false
     private var entries: List<QueueEntry> = emptyList()
     private val pollHandler = Handler(Looper.getMainLooper())
 
@@ -61,8 +67,14 @@ class MusicListActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         favourites = intent.getBooleanExtra(EXTRA_FAVOURITES, true)
-        binding.title.text =
-            getString(if (favourites) R.string.music_favorites else R.string.music_downloads)
+        presetQuery = intent.getStringExtra(EXTRA_PRESET_QUERY)
+        if (presetQuery != null) {
+            // Preset mode: title is the friendly preset name only.
+            binding.title.text = intent.getStringExtra(EXTRA_PRESET_TITLE) ?: "Curated Songs"
+        } else {
+            binding.title.text =
+                getString(if (favourites) R.string.music_favorites else R.string.music_downloads)
+        }
 
         favAdapter = MusicRowAdapter(
             onClick = { model ->
@@ -115,7 +127,7 @@ class MusicListActivity : AppCompatActivity() {
 
         binding.list.layoutManager = LinearLayoutManager(this)
         binding.list.itemAnimator = null
-        binding.list.adapter = if (favourites) favAdapter else downloadAdapter
+        binding.list.adapter = if (favourites || presetQuery != null) favAdapter else downloadAdapter
 
         binding.backButton.setOnClickListener { finish() }
         binding.playAllButton.setOnClickListener {
@@ -142,7 +154,9 @@ class MusicListActivity : AppCompatActivity() {
     }
 
     private fun reload() {
-        if (favourites) {
+        if (presetQuery != null) {
+            loadPreset()
+        } else if (favourites) {
             entries = LocalStore.musicFavorites(this).map { it.toQueueEntry() }
             favAdapter.submitList(entries.map { it.toRowModel() })
             binding.emptyView.setText(R.string.empty_music_favorites)
@@ -170,6 +184,32 @@ class MusicListActivity : AppCompatActivity() {
         }
     }
 
+    /** v1.9.6: backend search for preset cards — results appear as a normal curated list. */
+    private fun loadPreset() {
+        val q = presetQuery ?: return
+        if (presetLoaded) {
+            favAdapter.submitList(entries.map { it.toRowModel() })
+            binding.subtitle.text = getString(R.string.music_songs_fmt, entries.size)
+            return
+        }
+        binding.subtitle.text = "Loading…"
+        lifecycleScope.launch {
+            try {
+                val page = com.sparktube.app.data.YtRepository.searchVideos(q, null)
+                entries = page.items.map { it.toQueueEntry(isMusic = true) }
+            } catch (e: Exception) {
+                entries = emptyList()
+                Toast.makeText(this@MusicListActivity, "Couldn't load this mix — try again", Toast.LENGTH_SHORT).show()
+            }
+            presetLoaded = true
+            favAdapter.submitList(entries.map { it.toRowModel() })
+            binding.emptyView.isVisible = entries.isEmpty()
+            binding.summaryRow.isVisible = entries.isNotEmpty()
+            binding.playAllButton.isVisible = entries.isNotEmpty()
+            binding.subtitle.text = getString(R.string.music_songs_fmt, entries.size)
+        }
+    }
+
     private fun confirmDelete(record: DownloadRecord) {
         AlertDialog.Builder(this)
             .setTitle(R.string.download_delete_confirm)
@@ -185,11 +225,22 @@ class MusicListActivity : AppCompatActivity() {
 
     companion object {
         private const val EXTRA_FAVOURITES = "extra_favourites"
+        private const val EXTRA_PRESET_QUERY = "extra_preset_query"
+        private const val EXTRA_PRESET_TITLE = "extra_preset_title"
 
         fun start(context: Context, favourites: Boolean) {
             context.startActivity(
                 Intent(context, MusicListActivity::class.java)
                     .putExtra(EXTRA_FAVOURITES, favourites)
+            )
+        }
+
+        /** v1.9.6: open a curated preset list — the search query stays inside the app backend. */
+        fun startPreset(context: Context, title: String, query: String) {
+            context.startActivity(
+                Intent(context, MusicListActivity::class.java)
+                    .putExtra(EXTRA_PRESET_TITLE, title)
+                    .putExtra(EXTRA_PRESET_QUERY, query)
             )
         }
     }

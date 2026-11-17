@@ -68,6 +68,19 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
+        <!-- v1.9.6: card overflow menu (Play / Favorite / Share / Download / Remove) -->
+        <ImageButton
+            android:id="@+id/cardMenuBtn"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="8dp"
+            android:background="@drawable/bg_duration_glass"
+            android:contentDescription="@string/action_more"
+            android:src="@drawable/ic_np_more"
+            android:visibility="gone"
+            app:tint="@color/white" />
+
         <TextView
             android:id="@+id/duration"
             android:layout_width="wrap_content"

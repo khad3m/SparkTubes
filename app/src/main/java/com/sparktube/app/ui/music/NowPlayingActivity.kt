@@ -218,6 +218,15 @@ class NowPlayingActivity : AppCompatActivity() {
             PlaybackCenter.next()
         }
 
+        // v1.9.6: Add-to-Playlist beside the favorite button
+        binding.playlistAddButton.setOnClickListener {
+            val e = PlaybackCenter.currentEntry
+            if (e != null) {
+                com.sparktube.app.ui.music.PlaylistPicker.show(this, e.toVideoEntry(), e.title, e.uploader)
+            } else {
+                Toast.makeText(this, "Nothing is playing right now", Toast.LENGTH_SHORT).show()
+            }
+        }
         binding.favoriteButton.setOnClickListener { view ->
             bounceButton(view)
             val nowFav = PlaybackCenter.toggleFavoriteCurrent()
