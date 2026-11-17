@@ -71,9 +71,13 @@ object LocalStore {
     private const val MAX_SUBSCRIPTIONS = 200
     private const val MAX_SEARCHES = 20
     private const val MAX_PLAYLIST_VIDEOS = 500
-    private const val KEY_HOME_CACHE = "home_feed_cache_v1"
-    private const val KEY_MUSIC_CACHE = "music_feed_cache_v1"
+    private const val KEY_HOME_CACHE = "home_feed_cache_v2"
+    private const val KEY_MUSIC_CACHE = "music_feed_cache_v2"
     private const val MAX_FEED_CACHE_ITEMS = 18
+    /** v1.9.7: how many DISTINCT sections (country|query) we keep cached per store. */
+    private const val MAX_FEED_CACHE_SECTIONS = 14
+
+    private fun sectionKey(country: String, query: String) = "$country|$query"
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences("sparktube_local", Context.MODE_PRIVATE)
@@ -83,22 +87,37 @@ object LocalStore {
 
     /** Stores only lightweight UI metadata, never media bytes. */
     fun saveFeedCache(context: Context, music: Boolean, country: String, query: String, items: List<VideoEntry>) {
-        val trimmed = items.take(MAX_FEED_CACHE_ITEMS)
+        // v1.9.7: multi-section cache — every section keeps its own snapshot so the
+        // app can open ANY previously-seen section instantly, not just the last one.
+        val key = if (music) KEY_MUSIC_CACHE else KEY_HOME_CACHE
+        val sp = prefs(context)
+        val map = runCatching { JSONObject(sp.getString(key, "{}") ?: "{}") }.getOrDefault(JSONObject())
         val arr = JSONArray()
-        trimmed.forEach { e ->
+        items.take(MAX_FEED_CACHE_ITEMS).forEach { e ->
             arr.put(JSONObject().apply {
                 put("url", e.url); put("title", e.title); put("uploader", e.uploader)
                 put("thumb", e.thumbnailUrl); put("duration", e.durationSec); put("music", e.isMusic)
             })
         }
-        prefs(context).edit().putString(if (music) KEY_MUSIC_CACHE else KEY_HOME_CACHE,
-            JSONObject().apply { put("at", System.currentTimeMillis()); put("country", country); put("query", query); put("items", arr) }.toString()).apply()
+        map.put(sectionKey(country, query), JSONObject().apply {
+            put("at", System.currentTimeMillis()); put("country", country)
+            put("query", query); put("items", arr)
+        })
+        // v1.9.7: keep only the freshest MAX_FEED_CACHE_SECTIONS (old cache cleanup)
+        val entries = mutableListOf<Pair<String, Long>>()
+        val it = map.keys()
+        while (it.hasNext()) { val k = it.next(); entries.add(k to map.optJSONObject(k)?.optLong("at", 0L) ?: 0L) }
+        if (entries.size > MAX_FEED_CACHE_SECTIONS) {
+            val keep = entries.sortedByDescending { it.second }.take(MAX_FEED_CACHE_SECTIONS).map { it.first }.toSet()
+            for (k in entries.map { it.first }) if (k !in keep) map.remove(k)
+        }
+        sp.edit().putString(key, map.toString()).apply()
     }
 
     fun readFeedCache(context: Context, music: Boolean, country: String, query: String, ttlMs: Long): List<VideoEntry> {
         return runCatching {
             val raw = prefs(context).getString(if (music) KEY_MUSIC_CACHE else KEY_HOME_CACHE, null) ?: return emptyList()
-            val o = JSONObject(raw)
+            val o = JSONObject(raw).optJSONObject(sectionKey(country, query)) ?: return emptyList()
             if (o.optString("country") != country || o.optString("query") != query ||
                 System.currentTimeMillis() - o.optLong("at", 0L) > ttlMs) return emptyList()
             val a = o.optJSONArray("items") ?: return emptyList()

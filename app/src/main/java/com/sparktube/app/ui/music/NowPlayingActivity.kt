@@ -283,17 +283,17 @@ class NowPlayingActivity : AppCompatActivity() {
         }
 
         binding.artContainer.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
+            // v1.9.7: the poster is now a full-bleed cover; only the lyrics overlay
+            // keeps the centered-square sizing.
             val size = minOf(r - l, b - t).coerceAtLeast(0)
-            val lp = binding.art.layoutParams
-            if (size > 0 && (lp.width != size || lp.height != size)) {
-                lp.width = size
-                lp.height = size
-                binding.art.layoutParams = lp
+            if (size > 0) {
                 val olp = binding.lyricsOverlay.layoutParams as FrameLayout.LayoutParams
-                olp.width = size
-                olp.height = size
-                olp.gravity = Gravity.CENTER
-                binding.lyricsOverlay.layoutParams = olp
+                if (olp.width != size || olp.height != size) {
+                    olp.width = size
+                    olp.height = size
+                    olp.gravity = Gravity.CENTER
+                    binding.lyricsOverlay.layoutParams = olp
+                }
             }
         }
 

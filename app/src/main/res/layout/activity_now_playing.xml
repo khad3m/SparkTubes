@@ -105,10 +105,10 @@
         android:id="@+id/artContainer"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:layout_marginStart="28dp"
-        android:layout_marginTop="4dp"
-        android:layout_marginEnd="28dp"
-        android:layout_marginBottom="10dp"
+        android:layout_marginStart="18dp"
+        android:layout_marginTop="2dp"
+        android:layout_marginEnd="18dp"
+        android:layout_marginBottom="0dp"
         app:layout_constraintBottom_toTopOf="@id/infoBlock"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -116,12 +116,20 @@
 
         <com.google.android.material.imageview.ShapeableImageView
             android:id="@+id/art"
-            android:layout_width="250dp"
-            android:layout_height="250dp"
-            android:layout_gravity="center"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:elevation="24dp"
             android:scaleType="centerCrop"
             app:shapeAppearanceOverlay="@style/RoundedArt" />
+
+        <!-- v1.9.7: premium shadow — poster melts into the glass below -->
+        <View
+            android:id="@+id/artScrim"
+            android:layout_width="match_parent"
+            android:layout_height="130dp"
+            android:layout_gravity="bottom"
+            android:background="@drawable/bg_np_art_scrim"
+            android:importantForAccessibility="no" />
 
         <!-- Real-Time Tap-to-Seek Synced Lyrics Overlay -->
         <ScrollView

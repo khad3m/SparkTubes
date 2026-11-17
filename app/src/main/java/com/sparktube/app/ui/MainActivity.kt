@@ -71,6 +71,9 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
         maybeSilentUpdateCheck()
 
+        // v1.9.7: keep every section's cache warm in the background while the app runs
+        com.sparktube.app.data.SectionPreloader.start(this)
+
         listOf(binding.navHome, binding.navMusic, binding.navLibrary, binding.navMenu)
             .forEach { com.sparktube.app.ui.music.Motion.pressable(it, 0.92f) }
         com.sparktube.app.ui.music.Motion.pressable(binding.navShorts, 0.92f)

@@ -20,6 +20,8 @@ import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.playback.toQueueEntry
 import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.ui.common.DownloadAdapter
+import com.sparktube.app.ui.common.toEntry
+import com.sparktube.app.ui.common.toUiModel
 import com.sparktube.app.ui.common.MusicRowAdapter
 import com.sparktube.app.ui.common.VideoUiModel
 import com.sparktube.app.util.AppPrefs
@@ -187,16 +189,31 @@ class MusicListActivity : AppCompatActivity() {
     /** v1.9.6: backend search for preset cards — results appear as a normal curated list. */
     private fun loadPreset() {
         val q = presetQuery ?: return
+        val country = AppPrefs.countryOrDefault
+        // v1.9.7: previous session's results render instantly from the cache
+        if (!presetLoaded && entries.isEmpty()) {
+            val warm = LocalStore.readFeedCache(this, true, country, q, 0L)
+            if (warm.isNotEmpty()) {
+                entries = warm.map { it.toQueueEntry() }
+                favAdapter.submitList(entries.map { it.toRowModel() })
+                binding.emptyView.isVisible = false
+                binding.summaryRow.isVisible = true
+                binding.playAllButton.isVisible = true
+                binding.subtitle.text = getString(R.string.music_songs_fmt, entries.size)
+            }
+        }
         if (presetLoaded) {
             favAdapter.submitList(entries.map { it.toRowModel() })
             binding.subtitle.text = getString(R.string.music_songs_fmt, entries.size)
             return
         }
-        binding.subtitle.text = "Loading…"
+        if (entries.isEmpty()) binding.subtitle.text = "Loading…"
         lifecycleScope.launch {
             try {
                 val page = com.sparktube.app.data.YtRepository.searchVideos(q, null)
                 entries = page.items.map { it.toQueueEntry(isMusic = true) }
+                LocalStore.saveFeedCache(this@MusicListActivity, true, country, q,
+                    page.items.map { it.toUiModel().toEntry() })
             } catch (e: Exception) {
                 entries = emptyList()
                 Toast.makeText(this@MusicListActivity, "Couldn't load this mix — try again", Toast.LENGTH_SHORT).show()
