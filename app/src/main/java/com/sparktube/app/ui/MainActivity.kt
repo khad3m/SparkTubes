@@ -77,10 +77,10 @@ class MainActivity : AppCompatActivity() {
         listOf(binding.navHome, binding.navMusic, binding.navLibrary, binding.navMenu)
             .forEach { com.sparktube.app.ui.music.Motion.pressable(it, 0.92f) }
         com.sparktube.app.ui.music.Motion.pressable(binding.navShorts, 0.92f)
-        binding.navHome.setOnClickListener { select(R.id.navHome) }
-        binding.navMusic.setOnClickListener { select(R.id.navMusic) }
-        binding.navLibrary.setOnClickListener { select(R.id.navLibrary) }
-        binding.navMenu.setOnClickListener { select(R.id.navMenu) }
+        binding.navHome.setOnClickListener { showFloatingNav(); select(R.id.navHome) }
+        binding.navMusic.setOnClickListener { showFloatingNav(); select(R.id.navMusic) }
+        binding.navLibrary.setOnClickListener { showFloatingNav(); select(R.id.navLibrary) }
+        binding.navMenu.setOnClickListener { showFloatingNav(); select(R.id.navMenu) }
         // Shorts / Reels shortcut — present only while the feature is enabled
         // in Settings → Shorts / Reels videos (v1.7.0).
         binding.navShorts.setOnClickListener { v ->
@@ -344,6 +344,21 @@ class MainActivity : AppCompatActivity() {
                 else -> false
             }
         }
+    }
+
+    /** v1.9.8: scroll-hiding chrome support (used by HomeFragment). */
+    fun setBottomNavHidden(hidden: Boolean) {
+        val nav = binding.floatingNav
+        val margin = (nav.layoutParams as? android.widget.FrameLayout.LayoutParams)?.bottomMargin ?: 0
+        val target = if (hidden) (nav.height + margin).toFloat() else 0f
+        if (nav.translationY != target) {
+            nav.animate().translationY(target).setDuration(220)
+                .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        }
+    }
+
+    fun showFloatingNav() {
+        setBottomNavHidden(false)
     }
 
     private fun select(id: Int) {

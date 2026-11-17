@@ -404,4 +404,7 @@
     <string name="youtube_unlock_sign_in_btn">Sign in with Google to Unlock</string>
     <string name="action_more">More options</string>
 
+    <string name="offline_cached">Offline — showing saved videos</string>
+    <string name="showing_cached">Showing saved videos</string>
+    <string name="error_offline">You are offline. Saved content is shown when available.</string>
 </resources>

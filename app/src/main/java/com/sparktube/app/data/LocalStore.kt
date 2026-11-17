@@ -118,8 +118,11 @@ object LocalStore {
         return runCatching {
             val raw = prefs(context).getString(if (music) KEY_MUSIC_CACHE else KEY_HOME_CACHE, null) ?: return emptyList()
             val o = JSONObject(raw).optJSONObject(sectionKey(country, query)) ?: return emptyList()
-            if (o.optString("country") != country || o.optString("query") != query ||
-                System.currentTimeMillis() - o.optLong("at", 0L) > ttlMs) return emptyList()
+            if (o.optString("country") != country || o.optString("query") != query) return emptyList()
+            // v1.9.8 fix: ttlMs <= 0 means "accept any age". The old check treated 0 as
+            // "expire everything", so the stale-while-revalidate fallback NEVER worked
+            // and the app re-downloaded feeds on every open.
+            if (ttlMs > 0 && System.currentTimeMillis() - o.optLong("at", 0L) > ttlMs) return emptyList()
             val a = o.optJSONArray("items") ?: return emptyList()
             buildList { for (i in 0 until a.length()) { val x = a.getJSONObject(i); add(VideoEntry(
                 x.optString("url"), x.optString("title"), x.optString("uploader"),

@@ -345,6 +345,23 @@
         </HorizontalScrollView>
     </LinearLayout>
 
+    <!-- v1.9.8: offline / cached-content note -->
+    <TextView
+        android:id="@+id/offlinePill"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_floating_nav"
+        android:paddingStart="14dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="6dp"
+        android:text="@string/offline_cached"
+        android:textColor="@color/on_surface_variant"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipe"
         android:layout_width="match_parent"

@@ -208,6 +208,11 @@ class MusicListActivity : AppCompatActivity() {
             return
         }
         if (entries.isEmpty()) binding.subtitle.text = "Loading…"
+        if (!com.sparktube.app.util.Net.isOnline(this@MusicListActivity)) {
+            // v1.9.8: offline — cached preset stays, nothing to refresh
+            if (entries.isEmpty()) binding.subtitle.text = "Offline"
+            return
+        }
         lifecycleScope.launch {
             try {
                 val page = com.sparktube.app.data.YtRepository.searchVideos(q, null)

@@ -64,6 +64,7 @@ object SectionPreloader {
     }
 
     private suspend fun prefetchAll(app: Context) {
+        if (!com.sparktube.app.util.Net.isOnline(app)) return
         val country = AppPrefs.countryOrDefault
         val sections = buildList {
             HOME_SECTIONS.forEach { add(false to it) }

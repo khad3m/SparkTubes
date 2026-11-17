@@ -63,6 +63,13 @@ class HomeFragment : Fragment(), ScrollsToTop {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        // v1.9.8: fixed header stays; chips + floating nav hide/show on scroll
+        binding.list.addOnScrollListener(object : androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: androidx.recyclerview.widget.RecyclerView, dx: Int, dy: Int) {
+                onScrollDelta(dy)
+            }
+        })
+
         adapter = VideoAdapter(
             onClick = { model ->
                 PlayerActivity.start(requireContext(), model)
@@ -248,16 +255,24 @@ class HomeFragment : Fragment(), ScrollsToTop {
             b.emptyView.isVisible = false
             // v1.9.6: stale-while-revalidate ALWAYS — previously loaded cards appear
             // instantly even when the TTL expired, while the fresh feed loads below.
-            var warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, DeviceTuning.feedCacheTtlMs(requireContext()))
-            if (warm.isEmpty()) {
-                warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, 0L)
-            }
+            // v1.9.8: PWA-style offline-first — render the cached section instantly
+            // (any age), refresh in the background only when online, never drop saved
+            // content on failure. Works fully offline.
+            val warm = LocalStore.readFeedCache(requireContext(), false, country, catQuery, 0L)
+            val online = com.sparktube.app.util.Net.isOnline(requireContext())
+            b.offlinePill.text = getString(R.string.offline_cached)
+            b.offlinePill.isVisible = warm.isNotEmpty() && !online
             if (warm.isNotEmpty()) {
                 b.list.adapter = adapter
                 adapter.submitList(warm.map { it.toUiModel() })
                 b.list.alpha = 1f
             } else {
                 showSkeleton(b.list, SkeletonAdapter.STYLE_VIDEO, count = 8)
+            }
+            if (warm.isEmpty() && !online) {
+                b.errorText.text = getString(R.string.error_offline)
+                b.errorView.isVisible = true
+                return@launch
             }
             try {
                 val items = if (catQuery == FOR_YOU) {
@@ -271,6 +286,7 @@ class HomeFragment : Fragment(), ScrollsToTop {
                 b.list.adapter = adapter
                 adapter.submitList(items.map { it.toUiModel() })
                 b.list.animate().alpha(1f).setDuration(220).start()
+                b.offlinePill.isVisible = false
                 b.emptyView.isVisible = items.isEmpty()
                 if (items.isEmpty()) {
                     b.errorText.text = getString(R.string.error_no_results)
@@ -282,15 +298,95 @@ class HomeFragment : Fragment(), ScrollsToTop {
                 com.sparktube.app.util.DiagnosticsLogger.log(
                     "E", "Home", "load FAIL cat='$catQuery' ${e.javaClass.simpleName}: ${e.message?.take(150) ?: ""}"
                 )
-                b.list.adapter = adapter
-                adapter.submitList(emptyList())
-                b.errorText.text = Formatters.friendlyException(e)
-                b.errorView.isVisible = true
-                lastLoadedAt = 0L
+                if (warm.isNotEmpty()) {
+                    // v1.9.8: saved section stays on screen, just note the failure
+                    b.offlinePill.text = getString(R.string.showing_cached)
+                    b.offlinePill.isVisible = true
+                } else {
+                    b.list.adapter = adapter
+                    adapter.submitList(emptyList())
+                    b.errorText.text = Formatters.friendlyException(e)
+                    b.errorView.isVisible = true
+                    lastLoadedAt = 0L
+                }
             } finally {
                 b.swipe.isRefreshing = false
             }
         }
+    }
+
+    // ----- v1.9.8: scroll chrome (header pinned; sub-rows + nav collapse) -----
+
+    private var chromeHidden = false
+    private var scrollAccum = 0f
+
+    private fun scrollChromeViews(): List<android.view.View> = listOf(
+        binding.personalizedRow.parent as android.view.View,
+        binding.categoryChipsRow.parent as android.view.View
+    )
+
+    private fun onScrollDelta(dy: Int) {
+        val b = _binding ?: return
+        val threshold = 26f * resources.displayMetrics.density
+        scrollAccum += dy
+        if (!chromeHidden && scrollAccum > threshold && dy > 0) {
+            hideChrome(); scrollAccum = 0f
+        } else if (chromeHidden && (scrollAccum < -threshold || !b.list.canScrollVertically(-1))) {
+            showChrome(); scrollAccum = 0f
+        }
+    }
+
+    private fun hideChrome() {
+        chromeHidden = true
+        (activity as? com.sparktube.app.ui.MainActivity)?.setBottomNavHidden(true)
+        scrollChromeViews().forEach { v ->
+            val h = v.height
+            if (h <= 0) { v.isVisible = false; return@forEach }
+            v.tag = h
+            android.animation.ValueAnimator.ofInt(h, 0).apply {
+                duration = 180
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener { a ->
+                    v.layoutParams.height = a.animatedValue as Int
+                    v.layoutParams = v.layoutParams
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(a: android.animation.Animator?) { v.isVisible = false }
+                })
+                start()
+            }
+        }
+    }
+
+    private fun showChrome() {
+        (activity as? com.sparktube.app.ui.MainActivity)?.setBottomNavHidden(false)
+        if (!chromeHidden) return
+        chromeHidden = false
+        scrollChromeViews().forEach { v ->
+            val h = v.tag as? Int ?: return@forEach
+            v.isVisible = true
+            android.animation.ValueAnimator.ofInt(0, h).apply {
+                duration = 180
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener { a ->
+                    v.layoutParams.height = a.animatedValue as Int
+                    v.layoutParams = v.layoutParams
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(a: android.animation.Animator?) {
+                        v.layoutParams.height = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                        v.layoutParams = v.layoutParams
+                    }
+                })
+                start()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // v1.9.8: chrome is always visible when you arrive at the home tab
+        if (_binding != null) showChrome()
     }
 
     override fun onDestroyView() {

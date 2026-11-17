@@ -214,16 +214,25 @@ class MusicFragment : Fragment(), ScrollsToTop {
             if (!fromPull) showMusicSkeleton(b)
             try {
                 val country = AppPrefs.countryOrDefault
-                val warm = run {
-                    var w = LocalStore.readFeedCache(requireContext(), true, country, "music", DeviceTuning.feedCacheTtlMs(requireContext()))
-                    if (w.isEmpty()) w = LocalStore.readFeedCache(requireContext(), true, country, "music", 0L)
-                    w // v1.9.6: stale cards render instantly, fresh list still refreshes below
-                }
+                // v1.9.8: single stale-first read (any age) — the old ttl-0 fallback
+                // never matched anything, so music home re-downloaded on every open.
+                val warm = LocalStore.readFeedCache(requireContext(), true, country, "music", 0L)
                 if (warm.isNotEmpty() && cachedModels.isEmpty()) {
                     cachedModels = warm.map { it.toUiModel() }
                     loadedCountry = country
                     clearMusicSkeleton(b)
                     bindTrending(b, cachedModels, animate = false)
+                }
+                if (!com.sparktube.app.util.Net.isOnline(requireContext())) {
+                    // v1.9.8: offline — keep the cached music home, never error-view it away
+                    if (cachedModels.isNotEmpty()) {
+                        Toast.makeText(requireContext(), getString(R.string.offline_cached), Toast.LENGTH_SHORT).show()
+                    } else {
+                        clearMusicSkeleton(b)
+                        b.errorText.text = getString(R.string.error_offline)
+                        b.errorView.isVisible = true
+                    }
+                    return@launch
                 }
                 // v1.9.4: usage-based music home — artists/keywords the user
                 // actually listens to drive the feed, trending is the fallback.
@@ -243,10 +252,9 @@ class MusicFragment : Fragment(), ScrollsToTop {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (fromPull && cachedModels.isNotEmpty()) {
-                    Toast.makeText(
-                        requireContext(), "Couldn't refresh. Check your connection.", Toast.LENGTH_SHORT
-                    ).show()
+                if (cachedModels.isNotEmpty()) {
+                    // v1.9.8: cached content stays on screen on any failure
+                    Toast.makeText(requireContext(), getString(R.string.showing_cached), Toast.LENGTH_SHORT).show()
                 } else {
                     clearMusicSkeleton(b)
                     b.errorText.text = Formatters.friendlyException(e)
