@@ -106,7 +106,7 @@ object LocalStore {
         // v1.9.7: keep only the freshest MAX_FEED_CACHE_SECTIONS (old cache cleanup)
         val entries = mutableListOf<Pair<String, Long>>()
         val it = map.keys()
-        while (it.hasNext()) { val k = it.next(); entries.add(k to map.optJSONObject(k)?.optLong("at", 0L) ?: 0L) }
+        while (it.hasNext()) { val k = it.next(); entries.add(k to (map.optJSONObject(k)?.optLong("at", 0L) ?: 0L)) }
         if (entries.size > MAX_FEED_CACHE_SECTIONS) {
             val keep = entries.sortedByDescending { it.second }.take(MAX_FEED_CACHE_SECTIONS).map { it.first }.toSet()
             for (k in entries.map { it.first }) if (k !in keep) map.remove(k)
