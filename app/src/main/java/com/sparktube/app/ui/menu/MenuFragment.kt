@@ -12,7 +12,6 @@ import com.sparktube.app.R
 import com.sparktube.app.data.Countries
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.databinding.FragmentMenuBinding
-import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.ui.music.Motion
 import com.sparktube.app.util.AppPrefs
 import kotlinx.coroutines.launch
@@ -39,7 +38,7 @@ class MenuFragment : Fragment() {
         Motion.pressable(binding.rowSettings, 0.96f)
         Motion.pressable(binding.rowVideoSettings, 0.96f)
         Motion.pressable(binding.rowMusicSettings, 0.96f)
-        Motion.pressable(binding.rowGoogleAccount, 0.96f)
+        binding.rowGoogleAccount.visibility = android.view.View.GONE // v1.9.5: Google login removed
         Motion.pressable(binding.rowCheckUpdate, 0.96f)
 
         binding.profileHeroCard.setOnClickListener {
@@ -55,9 +54,6 @@ class MenuFragment : Fragment() {
         binding.rowMusicSettings.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_MUSIC)
         }
-        binding.rowGoogleAccount.setOnClickListener {
-            com.sparktube.app.ui.auth.YouTubeLoginActivity.start(requireContext())
-        }
         binding.rowCheckUpdate.setOnClickListener {
             SettingsPageActivity.start(requireContext(), SettingsPageActivity.TYPE_GENERAL)
         }
@@ -67,16 +63,15 @@ class MenuFragment : Fragment() {
         super.onResume()
         val country = AppPrefs.countryOrDefault
         binding.countryValue.text = "${Countries.flagOf(country)} ${Countries.nameOf(country)}"
-        // Google account management lives in Settings → "YouTube / Google Account";
-        // the menu keeps only the profile card (v1.7.0 removed the duplicate card here).
-        val loggedIn = YouTubeAuth.isLoggedIn()
-        binding.profileSubtitle.text = if (loggedIn) {
-            getString(R.string.youtube_account_connected_sub)
-        } else {
-            getString(R.string.profile_subtitle)
-        }
-        binding.accountValue.text = YouTubeAuth.accountSummary()
+        // v1.9.5: Google login removed — the profile card is local-only.
+        binding.profileSubtitle.text = getString(R.string.profile_subtitle)
+        binding.accountValue.text = "Local device"
         binding.versionValue.text = "v${com.sparktube.app.BuildConfig.VERSION_NAME}" 
+    }
+
+    /** v1.9.5: the Google account feature was removed entirely. */
+    private fun showAccountRemoved() {
+        Toast.makeText(requireContext(), "Google account is no longer supported", Toast.LENGTH_SHORT).show()
     }
 
     private fun showCountryPicker() {

@@ -60,7 +60,6 @@ import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.playback.StreamCatalog
 import com.sparktube.app.playback.toVideoEntry
 import com.sparktube.app.net.YouTubeAuth
-import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.ui.player.DownloadSheet
 import com.sparktube.app.ui.player.PlayerActivity
 import com.sparktube.app.util.AppPrefs
@@ -869,9 +868,6 @@ class NowPlayingActivity : AppCompatActivity() {
                 },
                 ActionSheet.Item("Start Station") { restartRadio() },
                 ActionSheet.Item("Download (Audio + .lrc Lyrics)") { onDownloadClicked() },
-                ActionSheet.Item("YouTube Account (${YouTubeAuth.accountSummary()})") {
-                    YouTubeLoginActivity.start(this)
-                },
                 ActionSheet.Item("Share Song Link") {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"

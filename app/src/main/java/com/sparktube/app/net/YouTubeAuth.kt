@@ -8,14 +8,13 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * Manages Google / YouTube session cookies, `SAPISIDHASH` authorization headers,
- * `X-Goog-Visitor-Id` / `DATASYNC_ID` session context, bidirectional WebView
- * CookieManager syncing, and client-matched `googlevideo.com` playback/download headers.
+ * Anonymous YouTube session context (v1.9.5: Google login removed): consent
+ * cookies, `X-Goog-Visitor-Id`, WebView CookieManager syncing, and client-matched
+ * `googlevideo.com` playback/download headers. No Google account state exists.
  */
 object YouTubeAuth {
 
@@ -95,17 +94,13 @@ object YouTubeAuth {
     }
 
     /**
-     * Returns merged cookies from both [AppPrefs.youtubeCookies] and the live
-     * Android [CookieManager] jar so rotated cookies are never lost.
+     * Returns the live Android [CookieManager] jar cookies (anonymous session:
+     * CONSENT/SOCS and any cookies the WebView unlock path picked up).
      */
     fun effectiveCookieMap(): LinkedHashMap<String, String> {
         val map = LinkedHashMap<String, String>()
         map["CONSENT"] = "YES+cb"
         map["SOCS"] = "CAI"
-        val saved = AppPrefs.youtubeCookies
-        if (saved.isNotBlank()) {
-            map.putAll(parseCookieMap(saved))
-        }
         runCatching {
             val cm = CookieManager.getInstance()
             for (domain in COOKIE_DOMAINS) {
@@ -118,48 +113,7 @@ object YouTubeAuth {
         return map
     }
 
-    fun extractSapisid(cookieMap: Map<String, String> = effectiveCookieMap()): String? {
-        return cookieMap["SAPISID"]?.takeIf { it.isNotBlank() }
-            ?: cookieMap["__Secure-3PAPISID"]?.takeIf { it.isNotBlank() }
-            ?: cookieMap["__Secure-1PAPISID"]?.takeIf { it.isNotBlank() }
-    }
-
-    fun isLoggedIn(): Boolean {
-        val map = effectiveCookieMap()
-        val hasSapisid = !extractSapisid(map).isNullOrBlank()
-        val hasSid = !map["SID"].isNullOrBlank() ||
-            !map["__Secure-1PSID"].isNullOrBlank() ||
-            !map["__Secure-3PSID"].isNullOrBlank() ||
-            !map["LOGIN_INFO"].isNullOrBlank()
-        return hasSapisid && hasSid
-    }
-
-    fun hasAuthCookiesInString(rawCookies: String): Boolean {
-        val map = parseCookieMap(rawCookies)
-        val hasSapisid = !extractSapisid(map).isNullOrBlank()
-        val hasSid = !map["SID"].isNullOrBlank() ||
-            !map["__Secure-1PSID"].isNullOrBlank() ||
-            !map["__Secure-3PSID"].isNullOrBlank() ||
-            !map["LOGIN_INFO"].isNullOrBlank()
-        return hasSapisid && hasSid
-    }
-
-    fun saveCookies(rawCookies: String, accountLabel: String = "Google Account Connected") {
-        val map = LinkedHashMap<String, String>()
-        map["CONSENT"] = "YES+cb"
-        map["SOCS"] = "CAI"
-        if (AppPrefs.youtubeCookies.isNotBlank()) {
-            map.putAll(parseCookieMap(AppPrefs.youtubeCookies))
-        }
-        map.putAll(parseCookieMap(rawCookies))
-        val serialized = map.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        AppPrefs.youtubeCookies = serialized
-        if (accountLabel.isNotBlank()) {
-            AppPrefs.youtubeAccountLabel = accountLabel
-        }
-        syncCookiesToWebView(null)
-    }
-
+    /** Google account login was removed in v1.9.5 — sessions are anonymous-only. */
     /**
      * Injects every saved cookie into Android's [CookieManager] ONE COOKIE AT A TIME.
      * Note: `CookieManager.setCookie(url, value)` parses `value` as a single `Set-Cookie`
@@ -196,8 +150,6 @@ object YouTubeAuth {
     }
 
     fun clearSession() {
-        AppPrefs.youtubeCookies = ""
-        AppPrefs.youtubeAccountLabel = ""
         AppPrefs.youtubeVisitorData = ""
         AppPrefs.youtubeDatasyncId = ""
         AppPrefs.youtubeSessionIndex = ""
@@ -212,11 +164,6 @@ object YouTubeAuth {
         }
     }
 
-    fun accountSummary(): String {
-        if (!isLoggedIn()) return "Not signed in"
-        return AppPrefs.youtubeAccountLabel.ifBlank { "Google Account Connected ✓" }
-    }
-
     fun buildCookieHeader(existingCookie: String? = null): String {
         val merged = LinkedHashMap<String, String>()
         merged["CONSENT"] = "YES+cb"
@@ -226,67 +173,6 @@ object YouTubeAuth {
         }
         merged.putAll(effectiveCookieMap())
         return merged.entries.joinToString("; ") { "${it.key}=${it.value}" }
-    }
-
-    /**
-     * Parses YouTube's `DATASYNC_ID` ("delegated_session_id||user_session_id" for brand
-     * accounts, or "user_session_id||" for primary accounts) exactly like `yt-dlp`.
-     */
-    fun parseDatasyncId(raw: String? = currentDatasyncId()): Pair<String?, String?> {
-        val clean = raw?.trim().orEmpty()
-        if (clean.isEmpty()) return null to null
-        val idx = clean.indexOf("||")
-        if (idx < 0) return null to clean.takeIf { it.isNotBlank() }
-        val first = clean.substring(0, idx).trim()
-        val second = clean.substring(idx + 2).trim()
-        return if (second.isNotEmpty()) {
-            first.takeIf { it.isNotEmpty() } to second
-        } else {
-            null to first.takeIf { it.isNotEmpty() }
-        }
-    }
-
-    fun delegatedSessionId(): String? =
-        parseDatasyncId().first?.takeIf { it.isNotBlank() && it != "0" }
-
-    fun userSessionId(): String? =
-        parseDatasyncId().second?.takeIf { it.isNotBlank() }
-
-    private fun sha1Token(
-        epochSec: Long,
-        secret: String,
-        origin: String,
-        userSessionId: String? = null
-    ): String? {
-        // Only include userSessionId in SAPISIDHASH when a delegated brand account is active
-        // or when explicitly required; standard primary accounts hash "$epochSec $secret $origin".
-        val useUserPart = !delegatedSessionId().isNullOrBlank() && !userSessionId.isNullOrBlank()
-        val payload = if (useUserPart) {
-            "$userSessionId $epochSec $secret $origin"
-        } else {
-            "$epochSec $secret $origin"
-        }
-        val sha1Hex = runCatching {
-            val digest = MessageDigest.getInstance("SHA-1").digest(payload.toByteArray(Charsets.UTF_8))
-            digest.joinToString("") { "%02x".format(Locale.US, it) }
-        }.getOrNull() ?: return null
-        return if (useUserPart) "${epochSec}_${sha1Hex}_u" else "${epochSec}_${sha1Hex}"
-    }
-
-    fun buildAuthorizationHeader(origin: String = "https://www.youtube.com"): String? {
-        val map = effectiveCookieMap()
-        val sapisid = extractSapisid(map) ?: return null
-        val epochSec = System.currentTimeMillis() / 1000L
-        val uSid = userSessionId()
-        val parts = mutableListOf<String>()
-        sha1Token(epochSec, sapisid, origin, uSid)?.let { parts.add("SAPISIDHASH $it") }
-        map["__Secure-1PAPISID"]?.takeIf { it.isNotBlank() }?.let { s1 ->
-            sha1Token(epochSec, s1, origin, uSid)?.let { parts.add("SAPISID1PHASH $it") }
-        }
-        map["__Secure-3PAPISID"]?.takeIf { it.isNotBlank() }?.let { s3 ->
-            sha1Token(epochSec, s3, origin, uSid)?.let { parts.add("SAPISID3PHASH $it") }
-        }
-        return parts.takeIf { it.isNotEmpty() }?.joinToString(" ")
     }
 
     @Volatile private var cachedVisitorData: String? = null
@@ -322,7 +208,6 @@ object YouTubeAuth {
         }
         if (!sessionIndex.isNullOrBlank()) {
             cachedSessionIndex = sessionIndex
-            AppPrefs.youtubeSessionIndex = sessionIndex
         }
         if (sts != null && sts > 0) {
             AppPrefs.youtubeSts = sts
@@ -345,30 +230,6 @@ object YouTubeAuth {
                 ?.takeIf { it.isNotBlank() }
                 ?.let { ds -> updateSessionMetadata(datasyncId = ds) }
         }
-    }
-
-    fun currentDatasyncId(): String? {
-        cachedDatasyncId?.takeIf { it.isNotBlank() }?.let { return it }
-        val saved = AppPrefs.youtubeDatasyncId
-        if (saved.isNotBlank()) {
-            cachedDatasyncId = saved
-            return saved
-        }
-        return null
-    }
-
-    fun sessionPageIndex(): String {
-        cachedSessionIndex?.takeIf { it.isNotBlank() }?.let { return it }
-        effectiveCookieMap()["SESSION_INDEX"]?.takeIf { it.isNotBlank() }?.let {
-            cachedSessionIndex = it
-            return it
-        }
-        val saved = AppPrefs.youtubeSessionIndex
-        if (saved.isNotBlank()) {
-            cachedSessionIndex = saved
-            return saved
-        }
-        return "0"
     }
 
     fun visitorData(allowNetworkFetch: Boolean = true): String? {
@@ -415,13 +276,6 @@ object YouTubeAuth {
                     .header("X-YouTube-Client-Name", "1")
                     .header("X-YouTube-Client-Version", "2.20260708.00.00")
                     .header("Cookie", buildCookieHeader())
-                if (isLoggedIn()) {
-                    buildAuthorizationHeader("https://www.youtube.com")?.let {
-                        rb.header("Authorization", it)
-                    }
-                    rb.header("X-Goog-AuthUser", sessionPageIndex())
-                    rb.header("X-Youtube-Bootstrap-Logged-In", "true")
-                }
                 rb.post(guidePayload.toRequestBody(JSON_MEDIA_TYPE))
                 visitorClient.newCall(rb.build()).execute().use { resp ->
                     if (!resp.isSuccessful) return@runCatching null
@@ -511,25 +365,11 @@ object YouTubeAuth {
             builder.header("Cookie", cookieHeader)
         }
 
-        if (isLoggedIn()) {
-            buildAuthorizationHeader(origin)?.let { auth ->
-                builder.header("Authorization", auth)
-            }
-            visitorData(allowNetworkFetch = true)?.let { builder.header("X-Goog-Visitor-Id", it) }
-            builder.header("X-Origin", origin)
-            builder.header("Origin", origin)
-            builder.header("X-Goog-AuthUser", sessionPageIndex())
-            // CRITICAL: Only send X-Goog-PageId when a real secondary Brand Account
-            // DELEGATED_SESSION_ID exists. Sending "X-Goog-PageId: 0" on a primary
-            // Google account invalidates the session and triggers LOGIN_REQUIRED.
-            delegatedSessionId()?.let { pageId ->
-                builder.header("X-Goog-PageId", pageId)
-            }
-            builder.header("X-Youtube-Bootstrap-Logged-In", "true")
-            builder.header("X-Goog-Api-Format-Version", "1")
-        } else {
-            visitorData(allowNetworkFetch = false)?.let { builder.header("X-Goog-Visitor-Id", it) }
-        }
+        // v1.9.5: anonymous-only session (Google login removed)
+        visitorData(allowNetworkFetch = false)?.let { builder.header("X-Goog-Visitor-Id", it) }
+        builder.header("X-Origin", origin)
+        builder.header("Origin", origin)
+        builder.header("X-Goog-Api-Format-Version", "1")
     }
 
     /**

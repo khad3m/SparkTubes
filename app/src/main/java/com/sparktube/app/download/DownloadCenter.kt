@@ -13,6 +13,9 @@ import com.sparktube.app.R
 import com.sparktube.app.data.DownloadRecord
 import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
+import android.content.ContentValues
+import android.os.Build
+import android.provider.MediaStore
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.playback.StreamCatalog

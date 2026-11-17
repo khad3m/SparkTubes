@@ -694,16 +694,9 @@ object YtRepository {
                 .header("Referer", "https://www.youtube.com/shorts")
                 .header("Accept-Language", "en-US,en;q=0.9")
                 .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            // Session cookies (+ SAPISIDHASH when signed in): personalized,
-            // user-specific shorts — the same account the user logged into.
+            // Session cookies (anonymous consent cookies only since v1.9.5).
             com.sparktube.app.net.YouTubeAuth.buildCookieHeader().let {
                 if (it.isNotBlank()) builder.header("Cookie", it)
-            }
-            if (com.sparktube.app.net.YouTubeAuth.isLoggedIn()) {
-                com.sparktube.app.net.YouTubeAuth.buildAuthorizationHeader()?.let {
-                    builder.header("Authorization", it)
-                }
-                builder.header("X-Goog-AuthUser", "0")
             }
 
             shortsHttpClient.newCall(builder.build()).execute().use { resp ->

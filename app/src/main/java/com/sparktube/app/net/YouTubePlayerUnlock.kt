@@ -316,7 +316,8 @@ object YouTubePlayerUnlock {
             }
         }
 
-        val loggedIn = YouTubeAuth.isLoggedIn()
+        // v1.9.5: anonymous-only ladder (Google login removed)
+        val loggedIn = false
         com.sparktube.app.util.DiagnosticsLogger.log(
             "I", "Unlock", "unlock start vid=$videoId loggedIn=$loggedIn"
         )
@@ -858,7 +859,7 @@ object YouTubePlayerUnlock {
             }
         }
 
-        if (spec.useCookies && YouTubeAuth.isLoggedIn()) {
+        if (spec.useCookies) {
             YouTubeAuth.applyYouTubeAuthToRequest(endpoint, reqBuilder)
         } else {
             reqBuilder.header("Cookie", "CONSENT=YES+cb; SOCS=CAI")

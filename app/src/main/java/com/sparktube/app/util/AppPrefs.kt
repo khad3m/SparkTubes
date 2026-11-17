@@ -30,9 +30,7 @@ object AppPrefs {
     private const val KEY_CUSTOM_DOWNLOAD_TREE_URI = "custom_download_tree_uri"
 
     // Google / YouTube session authentication cookies & account metadata
-    private const val KEY_YOUTUBE_COOKIES = "youtube_cookies"
-    private const val KEY_YOUTUBE_ACCOUNT_LABEL = "youtube_account_label"
-    private const val KEY_YOUTUBE_VISITOR_DATA = "youtube_visitor_data"
+            private const val KEY_YOUTUBE_VISITOR_DATA = "youtube_visitor_data"
     private const val KEY_YOUTUBE_DATASYNC_ID = "youtube_datasync_id"
     private const val KEY_YOUTUBE_SESSION_INDEX = "youtube_session_index"
     private const val KEY_YOUTUBE_STS = "youtube_sts"
@@ -194,20 +192,6 @@ object AppPrefs {
         get() = sp.getString(KEY_CUSTOM_DOWNLOAD_TREE_URI, "") ?: ""
         set(value) {
             sp.edit().putString(KEY_CUSTOM_DOWNLOAD_TREE_URI, value).apply()
-        }
-
-    /** Raw semicolon-separated YouTube session cookies captured after Google Sign-In. */
-    var youtubeCookies: String
-        get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_COOKIES, "") ?: "" else ""
-        set(value) {
-            if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_COOKIES, value).apply()
-        }
-
-    /** Display label (email or status) for the signed-in Google/YouTube account. */
-    var youtubeAccountLabel: String
-        get() = if (this::sp.isInitialized) sp.getString(KEY_YOUTUBE_ACCOUNT_LABEL, "") ?: "" else ""
-        set(value) {
-            if (this::sp.isInitialized) sp.edit().putString(KEY_YOUTUBE_ACCOUNT_LABEL, value).apply()
         }
 
     /** Persisted InnerTube visitorData token (`X-Goog-Visitor-Id`). */

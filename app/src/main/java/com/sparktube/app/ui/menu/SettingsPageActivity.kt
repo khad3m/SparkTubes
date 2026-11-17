@@ -27,7 +27,6 @@ import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.net.YouTubeAuth
 import com.sparktube.app.ui.music.Motion
-import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.databinding.ActivitySettingsPageBinding
 import com.sparktube.app.download.DownloadCenter
@@ -294,9 +293,6 @@ class SettingsPageActivity : AppCompatActivity() {
         content.addView(
             menuGrid(
                 listOf(
-                    GridItem(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
-                        showYouTubeAccountDialog()
-                    },
                     GridItem(
                         R.drawable.ic_palette,
                         getString(R.string.settings_animations),
@@ -340,29 +336,6 @@ class SettingsPageActivity : AppCompatActivity() {
                 )
             )
         )
-    }
-
-    private fun showYouTubeAccountDialog() {
-        // Browser session only. Password/TOTP auto-login and cloud unlock are removed.
-        val options = arrayOf(
-            "Browser login",
-            getString(R.string.youtube_account_sign_out)
-        )
-        AlertDialog.Builder(this)
-            .setTitle(R.string.youtube_account_connected)
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> YouTubeLoginActivity.start(this)
-                    else -> {
-                        YouTubeAuth.clearSession()
-                        YtRepository.clearCache()
-                        render()
-                        Toast.makeText(this, R.string.youtube_signed_out_toast, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
     }
 
     private fun showDownloadFolderPicker() {
@@ -816,9 +789,6 @@ class SettingsPageActivity : AppCompatActivity() {
         content.addView(
             menuGrid(
                 listOf(
-                    GridItem(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
-                        showYouTubeAccountDialog()
-                    },
                     GridItem(
                         R.drawable.ic_download,
                         getString(R.string.settings_download_folder),
@@ -903,9 +873,6 @@ class SettingsPageActivity : AppCompatActivity() {
         content.addView(
             menuGrid(
                 listOf(
-                    GridItem(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
-                        showYouTubeAccountDialog()
-                    },
                     GridItem(
                         R.drawable.ic_download,
                         getString(R.string.settings_download_folder),

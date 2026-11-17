@@ -60,7 +60,6 @@ import com.sparktube.app.playback.StreamCatalog
 import com.sparktube.app.playback.effectiveHeight
 import com.sparktube.app.playback.toVideoEntry
 import com.sparktube.app.net.YouTubeAuth
-import com.sparktube.app.ui.auth.YouTubeLoginActivity
 import com.sparktube.app.ui.channel.ChannelActivity
 import com.sparktube.app.ui.common.CommentAdapter
 import com.sparktube.app.ui.common.VideoAdapter
@@ -120,7 +119,6 @@ class PlayerActivity : AppCompatActivity() {
     private var subtitleJob: Job? = null
     private var subtitlesLoadedForKey: String? = null
     private var downloadResolveJob: Job? = null
-    private var awaitingLoginRetry: Boolean = false
 
     private val playbackListener = object : PlaybackCenter.Listener {
         override fun onItemChanged(entry: QueueEntry?) {
@@ -143,7 +141,7 @@ class PlayerActivity : AppCompatActivity() {
             binding.loading.isVisible = false
             binding.errorText.text = message
             binding.retryButton.isVisible = true
-            binding.errorSignInButton.isVisible = !YouTubeAuth.isLoggedIn()
+            binding.errorSignInButton.isVisible = false
             binding.errorView.isVisible = true
         }
 
@@ -307,10 +305,7 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         binding.retryButton.setOnClickListener { retry() }
-        binding.errorSignInButton.setOnClickListener {
-            awaitingLoginRetry = true
-            YouTubeLoginActivity.start(this)
-        }
+        binding.errorSignInButton.setOnClickListener { retry() }
 
         binding.actionFavorite.setOnClickListener { toggleFavorite() }
         binding.actionPlaylist.setOnClickListener { showPlaylistSheet() }
@@ -656,10 +651,6 @@ class PlayerActivity : AppCompatActivity() {
         updateModeSwitcherUi()
         updateSubtitleUiBadge()
         updateDownloadUi()
-        if (awaitingLoginRetry && YouTubeAuth.isLoggedIn()) {
-            awaitingLoginRetry = false
-            retry()
-        }
     }
 
     private fun applyCloseTransition() {
@@ -1780,13 +1771,6 @@ class PlayerActivity : AppCompatActivity() {
                     if (AppPrefs.sponsorBlock) "SponsorBlock enabled" else "SponsorBlock disabled",
                     Toast.LENGTH_SHORT
                 ).show()
-            }
-        )
-        tiles.add(
-            SettingsGridTile(R.drawable.ic_info, getString(R.string.youtube_account_title), YouTubeAuth.accountSummary()) {
-                sheet.dismiss()
-                awaitingLoginRetry = true
-                YouTubeLoginActivity.start(this)
             }
         )
         if (catalog != null && catalog.audioTracks.size > 1) {

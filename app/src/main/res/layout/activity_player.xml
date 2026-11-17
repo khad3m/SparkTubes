@@ -310,7 +310,7 @@
         android:padding="13dp"
         android:src="@drawable/ic_grid_videos"
         android:visibility="gone"
-        app:layout_constraintEnd_toStartOf="@id/fullscreenButton"
+        app:layout_constraintEnd_toStartOf="@id/scaleButton"
         app:layout_constraintTop_toTopOf="parent"
         app:tint="@color/white" />
 
