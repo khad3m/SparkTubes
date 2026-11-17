@@ -740,7 +740,11 @@ class SettingsPageActivity : AppCompatActivity() {
 
 
     private fun cacheSummary(): String {
-        val dirs = listOf(File(cacheDir, "image_cache"), File(cacheDir, "http_cache"))
+        val dirs = listOf(
+            File(cacheDir, "image_cache"),
+            File(cacheDir, "http_cache"),
+            com.sparktube.app.data.MetadataCache.dir(this)
+        )
         val bytes = dirs.sumOf { dirSize(it) }
         return formatLogSize(bytes) + " · capped"
     }
@@ -754,9 +758,13 @@ class SettingsPageActivity : AppCompatActivity() {
     private fun confirmCacheClear() {
         AlertDialog.Builder(this)
             .setTitle("Clear SparkTube cache?")
-            .setMessage("Only SparkTube's temporary image and HTTP metadata cache will be removed. Downloads, history and account data stay untouched.")
+            .setMessage("Only SparkTube's temporary image, HTTP and metadata cache will be removed. Downloads, history and account data stay untouched.")
             .setPositiveButton(android.R.string.ok) { _, _ ->
-                listOf(File(cacheDir, "image_cache"), File(cacheDir, "http_cache")).forEach { it.deleteRecursively() }
+                listOf(
+                    File(cacheDir, "image_cache"),
+                    File(cacheDir, "http_cache"),
+                    com.sparktube.app.data.MetadataCache.dir(this)
+                ).forEach { it.deleteRecursively() }
                 YtRepository.clearCache()
                 Toast.makeText(this, "Cache cleared ✓", Toast.LENGTH_SHORT).show()
                 render()

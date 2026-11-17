@@ -23,6 +23,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.imageview.ShapeableImageView
 import com.sparktube.app.R
+import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.util.DeviceTuning
@@ -220,7 +221,14 @@ class MusicFragment : Fragment(), ScrollsToTop {
                     clearMusicSkeleton(b)
                     bindTrending(b, cachedModels, animate = false)
                 }
-                val result = YtRepository.musicTrending(country)
+                // v1.9.4: usage-based music home — artists/keywords the user
+                // actually listens to drive the feed, trending is the fallback.
+                val snap = RecommendEngine.snapshot(requireContext())
+                val result = if (snap.hasSignal) {
+                    YtRepository.personalizedMusicFeed(country, snap)
+                } else {
+                    YtRepository.musicTrending(country)
+                }
                 val models = result.items.map { it.toUiModel() }
                 LocalStore.saveFeedCache(requireContext(), true, country, "music", models.map { it.toEntry() })
                 cachedModels = models

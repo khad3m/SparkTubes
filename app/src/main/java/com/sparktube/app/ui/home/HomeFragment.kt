@@ -19,6 +19,7 @@ import com.sparktube.app.data.Countries
 import com.sparktube.app.data.YtRepository
 import com.sparktube.app.data.VideoEntry
 import com.sparktube.app.data.LocalStore
+import com.sparktube.app.data.RecommendEngine
 import com.sparktube.app.util.DeviceTuning
 import com.sparktube.app.databinding.FragmentHomeBinding
 import com.sparktube.app.playback.PlaybackCenter
@@ -89,6 +90,11 @@ class HomeFragment : Fragment(), ScrollsToTop {
             )
         }
 
+        // v1.9.4: once the user has a usage profile, home defaults to the
+        // personalized For You feed instead of a fixed category search.
+        if (RecommendEngine.snapshot(requireContext()).hasSignal) {
+            selectedCategoryQuery = FOR_YOU
+        }
         setupCategoryChips()
         setupPersonalizedChips()
 
@@ -148,18 +154,24 @@ class HomeFragment : Fragment(), ScrollsToTop {
         row.removeAllViews()
         val searches = LocalStore.searches(requireContext()).take(4)
         val history = LocalStore.history(requireContext()).take(3)
+        val snap = RecommendEngine.snapshot(requireContext())
+        val topKeywords = snap.keywordWeights.entries
+            .sortedByDescending { it.value }
+            .take(2)
+            .map { it.key }
         val labels = LinkedHashSet<String>()
+        labels.add("For You")
+        topKeywords.forEach { if (it.length > 2) labels.add(it) }
         searches.forEach { if (it.length > 2) labels.add(it) }
         history.forEach {
             val words = it.title.trim().split(Regex("\\s+")).take(4).joinToString(" ")
             if (words.length > 2) labels.add(words)
         }
-        if (labels.isEmpty()) {
-            labels.add("For You")
+        if (labels.size == 1) {
             labels.add("Fresh Picks")
             labels.add("Trending Now")
         }
-        labels.take(4).forEachIndexed { index, label ->
+        labels.take(5).forEachIndexed { index, label ->
             val chip = TextView(requireContext()).apply {
                 text = if (index == 0 && label == "For You") "✦ For You" else label
                 setTextColor(requireContext().getColor(R.color.chip_text))
@@ -175,8 +187,11 @@ class HomeFragment : Fragment(), ScrollsToTop {
             }
             com.sparktube.app.ui.music.Motion.pressable(chip, 0.95f)
             chip.setOnClickListener {
-                val q = if (label == "For You" || label == "Fresh Picks" || label == "Trending Now")
-                    selectedCategoryQuery else label
+                val q = when (label) {
+                    "For You" -> FOR_YOU
+                    "Fresh Picks", "Trending Now" -> selectedCategoryQuery
+                    else -> label
+                }
                 selectedCategoryQuery = q
                 load()
             }
@@ -196,6 +211,7 @@ class HomeFragment : Fragment(), ScrollsToTop {
     override fun onResume() {
         super.onResume()
         binding.countryFlag.text = Countries.flagOf(AppPrefs.countryOrDefault)
+        setupPersonalizedChips()
         maybeReload()
     }
 
@@ -237,7 +253,11 @@ class HomeFragment : Fragment(), ScrollsToTop {
                 showSkeleton(b.list, SkeletonAdapter.STYLE_VIDEO, count = 8)
             }
             try {
-                val items = YtRepository.searchVideos(catQuery, null).items
+                val items = if (catQuery == FOR_YOU) {
+                    YtRepository.personalizedFeed(country, RecommendEngine.snapshot(requireContext()))
+                } else {
+                    YtRepository.searchVideos(catQuery, null).items
+                }
                 LocalStore.saveFeedCache(requireContext(), false, country, catQuery, items.map { it.toUiModel().toEntry() })
                 com.sparktube.app.util.DiagnosticsLogger.log("I", "Home", "category='$catQuery' items=${items.size}")
                 b.list.alpha = 0f
@@ -273,5 +293,8 @@ class HomeFragment : Fragment(), ScrollsToTop {
 
     private companion object {
         const val AUTO_REFRESH_MS = 5 * 60 * 1000L
+
+        /** Sentinel category that loads the usage-based personalized feed. */
+        const val FOR_YOU = "\u2726 For You"
     }
 }

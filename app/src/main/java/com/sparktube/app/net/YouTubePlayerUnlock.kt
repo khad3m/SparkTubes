@@ -2,6 +2,8 @@ package com.sparktube.app.net
 
 import android.net.Uri
 import android.util.Log
+import com.sparktube.app.SparkTubeAppHolder
+import com.sparktube.app.data.MetadataCache
 import com.sparktube.app.util.AppPrefs
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -65,6 +67,18 @@ object YouTubePlayerUnlock {
     private data class CachedUnlock(val jsonStr: String, val savedAtMs: Long)
     private val unlockedCache = ConcurrentHashMap<String, CachedUnlock>()
     private const val UNLOCK_CACHE_TTL_MS = 10 * 60_000L
+
+    /**
+     * v1.9.4 metadata cache: the resolved player JSON also survives app
+     * restarts (disk, 45 min TTL) so reopening a video costs ZERO InnerTube
+     * calls and the network ladder only runs on genuinely cold videos.
+     * Stream URLs inside a cached player JSON stay valid for ~6h upstream.
+     */
+    private const val UNLOCK_DISK_TTL_MS = 45 * 60_000L
+
+    /** Safe accessor — the holder is lateinit and this may run very early. */
+    private fun appCtx(): android.content.Context? =
+        runCatching { SparkTubeAppHolder.context }.getOrNull()
 
     @Volatile private var cachedSts: Int? = null
     @Volatile private var cachedStsAt: Long = 0L
@@ -286,6 +300,22 @@ object YouTubePlayerUnlock {
             }
         }
 
+        // v1.9.4: second layer — disk metadata cache (survives restarts)
+        if (videoId.length == 11) {
+            appCtx()?.let { ctx ->
+                MetadataCache.read(ctx, "player_$videoId", UNLOCK_DISK_TTL_MS)?.let { cachedJson ->
+                    runCatching {
+                        val parsed = JSONObject(cachedJson)
+                        unlockedCache[videoId] = CachedUnlock(parsed.toString(), System.currentTimeMillis())
+                        com.sparktube.app.util.DiagnosticsLogger.log(
+                            "I", "Unlock", "disk metadata cache hit vid=$videoId"
+                        )
+                        return parsed
+                    }
+                }
+            }
+        }
+
         val loggedIn = YouTubeAuth.isLoggedIn()
         com.sparktube.app.util.DiagnosticsLogger.log(
             "I", "Unlock", "unlock start vid=$videoId loggedIn=$loggedIn"
@@ -304,6 +334,7 @@ object YouTubePlayerUnlock {
                 ensureNewPipeThrottlingSafe(fb, videoId)
                 if (hasDirectAdaptiveVideoAndAudio(fb)) {
                     unlockedCache[videoId] = CachedUnlock(fb.toString(), System.currentTimeMillis())
+                    appCtx()?.let { ctx -> MetadataCache.write(ctx, "player_$videoId", fb.toString()) }
                     com.sparktube.app.util.DiagnosticsLogger.log(
                         "I", "Unlock", "client unlock OK vid=$videoId"
                     )
@@ -320,6 +351,7 @@ object YouTubePlayerUnlock {
             unlockedCache[videoId] = CachedUnlock(
                 muxedOnlyFallback.toString(), System.currentTimeMillis()
             )
+            appCtx()?.let { ctx -> MetadataCache.write(ctx, "player_$videoId", muxedOnlyFallback.toString()) }
             com.sparktube.app.util.DiagnosticsLogger.log(
                 "I", "Unlock", "muxed-only unlock OK vid=$videoId"
             )

@@ -1,5 +1,6 @@
 package com.sparktube.app.data
 
+import com.sparktube.app.SparkTubeAppHolder
 import com.sparktube.app.net.OkHttpDownloader
 import com.sparktube.app.net.YouTubePlayerUnlock
 import com.sparktube.app.util.AppPrefs
@@ -259,6 +260,100 @@ object YtRepository {
         }
 
         head + tail
+    }
+
+    /**
+     * v1.9.4: usage-based personalized MUSIC feed. Mirrors [personalizedFeed]
+     * but every candidate comes from YouTube Music's strict MUSIC_SONGS catalog:
+     * seeds are the artists the user actually listened to, then engine keywords
+     * and channels; candidates are engine-ranked with per-channel caps. Without
+     * usage signal it rotates [musicTrending] so refreshes still show variety.
+     */
+    suspend fun personalizedMusicFeed(
+        countryCode: String,
+        snap: RecommendEngine.Snapshot
+    ): PageResult = withContext(Dispatchers.IO) {
+        val base = musicTrending(countryCode)
+        if (!snap.hasSignal) {
+            return@withContext PageResult(
+                base.items.chunked(6).flatMap { it.shuffled() },
+                null
+            )
+        }
+
+        val watched = snap.recentWatchedUrls.toHashSet()
+        val seen = HashSet<String>()
+        val candidates = mutableListOf<StreamInfoItem>()
+
+        val artistSeeds = runCatching { SparkTubeAppHolder.context }
+            .getOrNull()
+            ?.let { ctx -> LocalStore.musicHistory(ctx).take(12).map { it.uploader } }
+            .orEmpty()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .shuffled()
+            .take(1)
+        val keywordSeeds = snap.keywordWeights.entries
+            .sortedByDescending { it.value }
+            .take(10)
+            .map { it.key }
+            .shuffled()
+            .take(2)
+        val channelSeeds = snap.channelWeights.entries
+            .sortedByDescending { it.value }
+            .take(4)
+            .map { it.key }
+            .shuffled()
+            .take(1)
+        val seedQueries = (artistSeeds.map { "$it songs" } +
+            keywordSeeds.map { "$it song" } +
+            channelSeeds.map { "$it songs" })
+            .distinct()
+            .take(3)
+
+        withTimeoutOrNull(RELATED_FETCH_TIMEOUT_MS) {
+            coroutineScope {
+                seedQueries.map { q ->
+                    async {
+                        runCatching { searchMusic(q, null) }
+                            .getOrDefault(PageResult(emptyList(), null))
+                    }
+                }.awaitAll()
+            }
+        }?.forEach { res ->
+            res.items.forEach { item ->
+                val u = item.url.orEmpty()
+                if (u.isNotBlank() && u !in watched && seen.add(u)) {
+                    candidates.add(item)
+                }
+            }
+        }
+
+        val baseFresh = base.items.filter { it.url.orEmpty() !in watched && seen.add(it.url.orEmpty()) }
+        val pool = candidates + baseFresh
+        if (pool.isEmpty()) {
+            return@withContext PageResult(base.items.shuffled(), null)
+        }
+        val ranked = pool
+            .map { it to (RecommendEngine.score(it, snap) + Math.random() * 0.45) }
+            .sortedByDescending { (_, score) -> score }
+
+        val perChannel = HashMap<String, Int>()
+        val head = mutableListOf<StreamInfoItem>()
+        val tail = mutableListOf<StreamInfoItem>()
+        ranked.forEach { (item, _) ->
+            val key = item.uploaderName?.trim()?.lowercase().orEmpty().ifEmpty { item.url }
+            val count = perChannel.getOrDefault(key, 0)
+            if (count >= MAX_PER_CHANNEL) {
+                tail.add(item)
+            } else {
+                perChannel[key] = count + 1
+                head.add(item)
+            }
+        }
+
+        PageResult(head + tail, null)
     }
 
     /**
@@ -625,6 +720,8 @@ object YtRepository {
         synchronized(streamInfoCache) {
             streamInfoCache.clear()
         }
+        // v1.9.4: the disk metadata cache belongs to the Cache guard too.
+        runCatching { MetadataCache.clear(SparkTubeAppHolder.context) }
     }
 
     fun invalidateStreamCache(url: String) {
