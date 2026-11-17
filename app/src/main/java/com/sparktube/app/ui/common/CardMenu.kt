@@ -8,7 +8,7 @@ import android.widget.Toast
 import com.sparktube.app.data.LocalStore
 import com.sparktube.app.data.VideoEntry
 import com.sparktube.app.data.YtRepository
-import com.sparktube.app.download.DownloadSheet
+import com.sparktube.app.ui.player.DownloadSheet
 import com.sparktube.app.playback.PlaybackCenter
 import com.sparktube.app.playback.QueueEntry
 import com.sparktube.app.playback.StreamCatalog
